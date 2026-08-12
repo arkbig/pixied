@@ -187,7 +187,11 @@ pixied_install() {
         pixied_options_apply_state
         pixied_resolve_paths
     fi
+    pixied_options_wizard "$state_exists"
+    pixied_options_validate_state_transition
+    pixied_resolve_paths
     pixied_confirm_pixi_home
+    pixied_options_confirm_install
 
     pixied_step "Preparing the dedicated Pixi environment for $PIXIED_MACHINE_ID"
     pixied_run mkdir -p -- "$PIXIED_STATE_DIR" "$PIXIED_MACHINE_STATE_DIR" "$PIXIED_CONFIG_DIR"

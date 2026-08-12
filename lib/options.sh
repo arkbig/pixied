@@ -184,6 +184,164 @@ pixied_options_parse() {
     export PIXIED_INSTALL_ASSUME_YES
 }
 
+# @description Read one value from the interactive installation wizard.
+# @arg $1 string The prompt to print.
+# @set PIXIED_OPTIONS_ANSWER string The value entered by the user.
+# @exitcode 0 When a value is read.
+# @exitcode 1 When standard input reaches EOF.
+pixied_options_prompt() {
+    local prompt=$1
+    printf '%s' "$prompt" >&2
+    if ! IFS= read -r PIXIED_OPTIONS_ANSWER; then
+        pixied_die "installation wizard reached end of input"
+    fi
+}
+
+# @description Ask for and validate the installation settings in an interactive wizard.
+# The current resolved values are used as defaults. Explicit command-line and
+# environment values can still be reviewed and changed by the user.
+#
+# @arg $1 integer Whether a state file already exists.
+# @exitcode 0 When the wizard is skipped or completed.
+# @exitcode 1 When the user selects an invalid or conflicting value.
+pixied_options_wizard() {
+    local state_exists=${1:-0}
+    local answer home_mode local_home local_home_default session_manager
+    local use_sudo machine_id previous_machine_id
+
+    [ "${PIXIED_INSTALL_ASSUME_YES:-0}" -eq 0 ] || return 0
+    if ! [ -t 0 ] || ! [ -t 1 ]; then
+        return 0
+    fi
+
+    previous_machine_id=$PIXIED_MACHINE_ID
+    pixied_step "Installation configuration wizard"
+
+    home_mode=$PIXIED_HOME_MODE
+    while :; do
+        pixied_options_prompt "Home mode [local/nfs] (current: $home_mode): "
+        answer=${PIXIED_OPTIONS_ANSWER:-$home_mode}
+        case "$answer" in
+        local | nfs)
+            home_mode=$answer
+            export PIXIED_HOME_MODE=$home_mode
+            PIXIED_OPTION_CLI_SET[home_mode]=1
+            break
+            ;;
+        *) pixied_warn "choose local or nfs" ;;
+        esac
+    done
+
+    if [ "$home_mode" = nfs ]; then
+        local_home_default=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
+        if [ "$local_home_default" = "$PIXIED_ACCOUNT_HOME" ]; then
+            local_home_default=/local/${USER:-$(id -un)}
+        fi
+        local_home=$local_home_default
+        while :; do
+            pixied_options_prompt "Local home (current: $local_home): "
+            answer=${PIXIED_OPTIONS_ANSWER:-$local_home}
+            case "$answer" in
+            /*)
+                local_home=$answer
+                export PIXIED_LOCAL_HOME=$local_home
+                PIXIED_OPTION_CLI_SET[local_home]=1
+                break
+                ;;
+            *) pixied_warn "local home must be an absolute path" ;;
+            esac
+        done
+    fi
+
+    session_manager=$PIXIED_SESSION_MANAGER
+    while :; do
+        pixied_options_prompt "Session manager [zellij/none] (current: $session_manager): "
+        answer=${PIXIED_OPTIONS_ANSWER:-$session_manager}
+        case "$answer" in
+        zellij | none)
+            session_manager=$answer
+            export PIXIED_SESSION_MANAGER=$session_manager
+            PIXIED_OPTION_CLI_SET[session_manager]=1
+            break
+            ;;
+        *) pixied_warn "choose zellij or none" ;;
+        esac
+    done
+
+    use_sudo=${PIXIED_USE_SUDO:-0}
+    while :; do
+        pixied_options_prompt "Allow sudo for optional system changes [yes/no] (current: $([ "$use_sudo" -eq 1 ] && printf yes || printf no)): "
+        answer=${PIXIED_OPTIONS_ANSWER:-$use_sudo}
+        case "${answer,,}" in
+        1 | y | yes | true)
+            use_sudo=1
+            export PIXIED_USE_SUDO=$use_sudo
+            PIXIED_OPTION_CLI_SET[use_sudo]=1
+            break
+            ;;
+        0 | n | no | false)
+            use_sudo=0
+            export PIXIED_USE_SUDO=$use_sudo
+            PIXIED_OPTION_CLI_SET[use_sudo]=1
+            break
+            ;;
+        *) pixied_warn "choose yes or no" ;;
+        esac
+    done
+
+    machine_id=$PIXIED_MACHINE_ID
+    while :; do
+        pixied_options_prompt "Machine ID (current: $machine_id): "
+        answer=${PIXIED_OPTIONS_ANSWER:-$machine_id}
+        if pixied_machine_id_is_safe "$answer"; then
+            machine_id=$answer
+            export PIXIED_MACHINE_ID=$machine_id
+            PIXIED_OPTION_CLI_SET[machine_id]=1
+            break
+        fi
+        pixied_warn "machine ID contains unsafe characters"
+    done
+    if [ "$state_exists" -eq 1 ] && [ "$machine_id" != "$previous_machine_id" ]; then
+        pixied_die "cannot change machine ID during reinstall; run uninstall first"
+    fi
+}
+
+# @description Print the resolved installation settings and ask for final approval.
+# The confirmation occurs after all settings and paths have been resolved but
+# before any Pixi binary, runtime hook, launcher, or state is installed.
+#
+# @exitcode 0 When the confirmation is skipped or accepted.
+# @exitcode 1 When the user declines the installation.
+pixied_options_confirm_install() {
+    local answer pixi_version
+    [ "${PIXIED_INSTALL_ASSUME_YES:-0}" -eq 0 ] || return 0
+    if ! [ -t 0 ] || ! [ -t 1 ]; then
+        return 0
+    fi
+
+    pixi_version=${PIXIED_PIXI_VERSION:-${PIXIED_PIXI_VERSION_DEFAULT:-unknown}}
+    pixied_step "Review installation"
+    cat >&2 <<EOF
+  Home mode: $PIXIED_HOME_MODE
+  Account home: $PIXIED_ACCOUNT_HOME
+  Local home: $PIXIED_LOCAL_HOME
+  Session manager: $PIXIED_SESSION_MANAGER
+  Allow sudo: $([ "$PIXIED_USE_SUDO" -eq 1 ] && printf yes || printf no)
+  Machine ID: $PIXIED_MACHINE_ID
+  Pixi version: $pixi_version
+  Pixi home: $PIXIED_PIXI_HOME
+  Data directory: $PIXIED_DATA_DIR
+  Config directory: $PIXIED_CONFIG_DIR
+  State directory: $PIXIED_STATE_DIR
+EOF
+    pixied_options_prompt "Proceed with installation? [Y/n] "
+    answer=${PIXIED_OPTIONS_ANSWER,,}
+    case "$answer" in
+    "" | y | yes) ;;
+    *) pixied_die "installation cancelled by user" ;;
+    esac
+}
+
 # @description Return whether an option was explicitly supplied by CLI or environment.
 # @arg $1 string The option name.
 # @exitcode 0 When the option has an explicit value.
