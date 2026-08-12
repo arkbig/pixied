@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+# @brief The command line entry point for the PixiEden runtime.
+# @description
+# The CLI core that interprets and executes commands.
+# Path resolution and state management are delegated to the libraries under lib.
+
+PIXIED_VERSION="0.1.0"
+readonly PIXIED_VERSION
+
+# Get the absolute path to the pixied binary, resolving any symlinks
+# manually for systems that don't support `readlink -f`.
+PIXIED_SOURCE=${BASH_SOURCE[0]}
+while [ -L "$PIXIED_SOURCE" ]; do
+    PIXIED_LINK_DIR=$(cd "$(dirname "$PIXIED_SOURCE")" && pwd)
+    PIXIED_SOURCE=$(readlink "$PIXIED_SOURCE")
+    case "$PIXIED_SOURCE" in
+    /*) ;;
+    *) PIXIED_SOURCE="$PIXIED_LINK_DIR/$PIXIED_SOURCE" ;;
+    esac
+done
+PIXIED_BIN_DIR=$(cd "$(dirname "$PIXIED_SOURCE")" && pwd)
+readonly PIXIED_BIN_DIR
+PIXIED_ROOT=$(cd "$PIXIED_BIN_DIR/.." && pwd)
+readonly PIXIED_ROOT
+
+# shellcheck source=lib/common.sh
+. "$PIXIED_ROOT/lib/common.sh"
+# shellcheck source=lib/paths.sh
+. "$PIXIED_ROOT/lib/paths.sh"
+# shellcheck source=lib/state.sh
+. "$PIXIED_ROOT/lib/state.sh"
+# shellcheck source=lib/options.sh
+. "$PIXIED_ROOT/lib/options.sh"
+# shellcheck source=lib/pixi.sh
+. "$PIXIED_ROOT/lib/pixi.sh"
+# shellcheck source=lib/sync.sh
+. "$PIXIED_ROOT/lib/sync.sh"
+# shellcheck source=lib/systemd.sh
+. "$PIXIED_ROOT/lib/systemd.sh"
+# shellcheck source=lib/session.sh
+. "$PIXIED_ROOT/lib/session.sh"
+# shellcheck source=lib/hook.sh
+. "$PIXIED_ROOT/lib/hook.sh"
+# shellcheck source=lib/generate.sh
+. "$PIXIED_ROOT/lib/generate.sh"
+# shellcheck source=lib/uninstall.sh
+. "$PIXIED_ROOT/lib/uninstall.sh"
+pixied_enable_strict_mode
+
+# @description Print the usage and the list of available commands to standard output.
+# @stdout The help message
+pixied_usage() {
+    cat <<'USAGE'
+Usage: pixied [COMMAND]
+
+Commands:
+    (no command)           Alias for shell.
+    shell                  Attach to the PixiEden session.
+    run <command>          Run a command in the PixiEden runtime.
+    install                Install the dedicated Pixi environment and verify state.
+    hook <bash|zsh>        Print shell initialization code.
+    generate direnv        Generate a project .envrc
+    generate devcontainer  Generate a DevContainer definition
+    generate dockerfile    Generate a Dockerfile
+    uninstall              Remove the PixiEden installation.
+    help                   Show this help.
+    version                Print the PixiEden version.
+
+Runtime activation uses the dedicated Pixi environment and starts an isolated child process.
+USAGE
+}
+
+# @description Attach to the PixiEden session.
+# Loads and validates the current machine state before starting an interactive
+# child shell or attaching to the direct Zellij session.
+#
+# @exitcode 0 When the child shell or attach process exits successfully.
+# @exitcode The child or attach process exit status, including 128 plus the
+# signal number when the process was terminated by a signal.
+pixied_shell() {
+    [ "$#" -eq 0 ] || pixied_die "usage: pixied shell" "$PIXIED_EXIT_USAGE"
+    pixied_runtime_shell
+}
+
+# @description Run a command in the PixiEden runtime.
+# Explicit commands run directly without Zellij and without requiring a TTY.
+#
+# @arg $@ string The command and arguments to execute.
+# @exitcode 0 When the command exits successfully.
+# @exitcode The command exit status, including 128 plus the signal number when
+# the process was terminated by a signal.
+pixied_run_command() {
+    [ "$#" -gt 0 ] || pixied_die "usage: pixied run <command> [args...]" "$PIXIED_EXIT_USAGE"
+    pixied_runtime_run "$@"
+}
+
+# @description Handle the hook that prints shell initialization code.
+# Bash and zsh are supported. The runtime state and generated hook are
+# validated before source code is emitted.
+#
+# @arg $@ string The shell name to hook
+# @exitcode 2 When the usage is invalid
+# @exitcode 1 When the installation or generated hook is invalid
+pixied_hook() {
+    if [ "$#" -ne 1 ]; then
+        pixied_die "usage: pixied hook <bash|zsh>" "$PIXIED_EXIT_USAGE"
+    fi
+    case "$1" in
+    bash | zsh) ;;
+    *) pixied_die "usage: pixied hook <bash|zsh>" "$PIXIED_EXIT_USAGE" ;;
+    esac
+    pixied_runtime_load_state
+    pixied_hook_emit
+}
+
+# @description Warn and ask whether to continue when the resolved pixi home is
+# not on a local filesystem.
+# Runs after path resolution so that a forced local home mode or an explicit
+# PIXIED_PIXI_HOME override that actually lands on a non-local filesystem is
+# surfaced to the user. When stdin/stdout are not interactive TTYs, the warning
+# is printed but the run continues without prompting so that automation is not
+# blocked.
+#
+# @exitcode 0 When the pixi home is local, when continuing, or when no TTY is present
+# @exitcode 1 When the user declines to continue
+# @see pixied_is_local_filesystem
+pixied_confirm_pixi_home() {
+    if pixied_is_local_filesystem "$PIXIED_PIXI_HOME"; then
+        return "$PIXIED_EXIT_OK"
+    fi
+    pixied_warn "resolved pixi home is not on a local filesystem: $PIXIED_PIXI_HOME"
+    pixied_warn "running pixi from a non-local filesystem may be slow and unstable"
+    if [ "${PIXIED_INSTALL_ASSUME_YES:-0}" -eq 1 ]; then
+        return "$PIXIED_EXIT_OK"
+    fi
+    if ! [ -t 0 ] || ! [ -t 1 ]; then
+        pixied_warn "no interactive TTY; continuing without confirmation"
+        return "$PIXIED_EXIT_OK"
+    fi
+    printf '%sContinue anyway? [y/N] %s' "$PIXIED_COLOR_YELLOW" "$PIXIED_COLOR_RESET" >&2
+    IFS= read -r answer
+    case "$answer" in
+    [yY] | [yY][eE][sS]) return "$PIXIED_EXIT_OK" ;;
+    *) pixied_die "aborted by user after the non-local pixi home warning" ;;
+    esac
+}
+
+# @description Resolve PixiEden paths and create or verify state.
+# With --help, prints the help and exits successfully.
+# Otherwise resolves paths, creates the state directory, acquires the lock,
+# and then loads or initializes and writes the state.
+#
+# @arg $@ string install options
+# @exitcode 0 On success
+# @exitcode 2 When an unknown option is given
+# @exitcode 1 On failure
+# @see pixied_resolve_paths
+# @see pixied_state_lock_acquire
+# @see pixied_state_load
+# @see pixied_state_initialize_from_paths
+pixied_install() {
+    local state_exists=0 created_data=0 created_pixi_home=0
+
+    pixied_install_state_checkpoint() {
+        pixied_state_set pixi_binary_path "$PIXIED_PIXI_BINARY_PATH"
+        pixied_state_set pixi_binary_hash "$PIXIED_PIXI_BINARY_HASH"
+        pixied_state_set created_data "$created_data"
+        pixied_state_set created_pixi_home "$created_pixi_home"
+        pixied_state_write "$PIXIED_STATE_FILE"
+    }
+
+    pixied_options_parse "$@"
+    if [ "${PIXIED_OPTIONS_HELP:-0}" -eq 1 ]; then
+        pixied_usage
+        return "$PIXIED_EXIT_OK"
+    fi
+
+    pixied_options_apply_defaults
+    pixied_resolve_paths
+    pixied_require_cmd bash
+    pixied_run bash --version >/dev/null
+
+    if [ -e "$PIXIED_STATE_FILE" ] || [ -L "$PIXIED_STATE_FILE" ]; then
+        pixied_state_load "$PIXIED_STATE_FILE"
+        state_exists=1
+        pixied_options_validate_state_transition
+        pixied_options_apply_state
+        pixied_resolve_paths
+    fi
+    pixied_confirm_pixi_home
+
+    pixied_step "Preparing the dedicated Pixi environment for $PIXIED_MACHINE_ID"
+    pixied_run mkdir -p -- "$PIXIED_STATE_DIR" "$PIXIED_MACHINE_STATE_DIR" "$PIXIED_CONFIG_DIR"
+    pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    if [ "$state_exists" -eq 1 ]; then
+        pixied_state_load "$PIXIED_STATE_FILE"
+        pixied_options_validate_state_transition
+        pixied_options_apply_state
+        pixied_resolve_paths
+    else
+        pixied_state_initialize_from_paths
+    fi
+
+    if [ -e "$PIXIED_DATA_DIR" ] || [ -L "$PIXIED_DATA_DIR" ]; then
+        if [ "$state_exists" -eq 1 ] && pixied_state_has created_data; then
+            created_data=${PIXIED_STATE[created_data]}
+        else
+            created_data=${PIXIED_DEPLOY_CREATED_DATA:-0}
+        fi
+    else
+        created_data=1
+    fi
+    if [ -e "$PIXIED_PIXI_HOME" ] || [ -L "$PIXIED_PIXI_HOME" ]; then
+        created_pixi_home=${PIXIED_STATE[created_pixi_home]:-0}
+    else
+        created_pixi_home=1
+    fi
+    pixied_pixi_validate_home_boundary "$created_pixi_home"
+
+    pixied_state_set machine_id "$PIXIED_MACHINE_ID"
+    pixied_state_set account_home "$PIXIED_ACCOUNT_HOME"
+    pixied_state_set home_mode "$PIXIED_HOME_MODE"
+    pixied_state_set local_home "$PIXIED_LOCAL_HOME"
+    pixied_state_set session_manager "$PIXIED_SESSION_MANAGER"
+    pixied_state_set use_sudo "$PIXIED_USE_SUDO"
+    pixied_state_set data_dir "$PIXIED_DATA_DIR"
+    pixied_state_set config_dir "$PIXIED_CONFIG_DIR"
+    pixied_state_set state_dir "$PIXIED_STATE_DIR"
+    pixied_state_set systemd_user_dir "$PIXIED_SYSTEMD_USER_DIR"
+    pixied_state_set command_bin "$PIXIED_COMMAND_BIN"
+    pixied_state_set pixi_home "$PIXIED_PIXI_HOME"
+    pixied_state_set sync_baseline "$PIXIED_MACHINE_STATE_DIR/sync-baseline"
+    pixied_pixi_install_binary
+    if [ "${PIXIED_STATE[created_data]:-0}" -eq 1 ]; then
+        created_data=1
+    fi
+    if [ "${PIXIED_STATE[created_pixi_home]:-0}" -eq 1 ]; then
+        created_pixi_home=1
+    fi
+    pixied_install_state_checkpoint
+    pixied_pixi_provision_globals
+    pixied_state_set pixi_binary_path "$PIXIED_PIXI_BINARY_PATH"
+    pixied_state_set pixi_binary_hash "$PIXIED_PIXI_BINARY_HASH"
+    pixied_state_set direnv_path "$PIXIED_DIRENV_PATH"
+    pixied_state_set direnv_hash "$(pixied_sha256_file "$PIXIED_DIRENV_PATH")"
+    unset 'PIXIED_STATE[zellij_path]' 'PIXIED_STATE[zellij_hash]'
+    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
+        pixied_state_set zellij_path "$PIXIED_ZELLIJ_PATH"
+        pixied_state_set zellij_hash "$(pixied_sha256_file "$PIXIED_ZELLIJ_PATH")"
+    fi
+    pixied_state_set created_data "$created_data"
+    pixied_state_set created_pixi_home "$created_pixi_home"
+    pixied_hook_generate_runtime
+    pixied_launcher_generate
+    pixied_state_write "$PIXIED_STATE_FILE"
+    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
+        PIXIED_SYSTEMD_UNIT_PATH=$(pixied_validate_canonical_path \
+            "$PIXIED_SYSTEMD_USER_DIR/pixied-$PIXIED_MACHINE_ID.service")
+        export PIXIED_SYSTEMD_UNIT_PATH
+        pixied_state_set unit_path "$PIXIED_SYSTEMD_UNIT_PATH"
+        pixied_state_set systemd_available 0
+        pixied_state_set linger_enabled 0
+        pixied_state_set created_linger 0
+        pixied_state_write "$PIXIED_STATE_FILE"
+    fi
+    pixied_systemd_prepare
+    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
+        pixied_state_set unit_path "$PIXIED_SYSTEMD_UNIT_PATH"
+        pixied_state_set unit_hash "$PIXIED_SYSTEMD_UNIT_HASH"
+        pixied_state_set systemd_available "${PIXIED_SYSTEMD_AVAILABLE:-0}"
+        pixied_state_set linger_enabled "${PIXIED_SYSTEMD_LINGER_ENABLED:-0}"
+        pixied_state_set created_linger "${PIXIED_SYSTEMD_CREATED_LINGER:-0}"
+    else
+        unset 'PIXIED_STATE[unit_path]' 'PIXIED_STATE[unit_hash]' \
+            'PIXIED_STATE[systemd_available]' 'PIXIED_STATE[linger_enabled]' \
+            'PIXIED_STATE[created_linger]'
+    fi
+    pixied_state_write "$PIXIED_STATE_FILE"
+    pixied_state_lock_release
+    if [ "$state_exists" -eq 1 ]; then
+        pixied_info "Validated and repaired existing state: $PIXIED_STATE_FILE"
+    else
+        pixied_info "Created state: $PIXIED_STATE_FILE"
+    fi
+    pixied_success "Runtime hook, dedicated Pixi environment, and session support are ready"
+    pixied_print_next_steps
+}
+
+# @description Print the shell setup steps required after installation.
+# The installer does not modify the user's shell configuration automatically.
+#
+# @stderr The next-step instructions for starting or automatically enabling PixiEden
+pixied_print_next_steps() {
+    local launcher launcher_literal
+    launcher="$PIXIED_COMMAND_BIN/pixied"
+    printf -v launcher_literal '%q' "$launcher"
+    cat >&2 <<EOF
+[pixied] NEXT Start PixiEden now or enable it automatically:
+
+Option A (Start now):
+  Run this command:
+    $launcher_literal shell
+
+Option B (Automatic - Recommended):
+  Add to ~/.bashrc, then restart your terminal:
+    if command -v $launcher_literal >/dev/null 2>&1; then
+        eval "\$($launcher_literal hook bash)"
+    fi
+  For zsh, add the equivalent block to ~/.zshrc and use hook zsh.
+EOF
+}
+
+# @description Remove the current machine's PixiEden installation.
+# Validates ownership state and removes managed resources through quarantine.
+#
+# @arg $@ string Uninstall arguments.
+# @exitcode 0 When the installation is removed.
+# @exitcode 1 When confirmation, validation, or cleanup fails.
+# @exitcode 2 When an argument is invalid.
+pixied_uninstall() {
+    pixied_uninstall_run "$@"
+}
+
+# @description The main entry point of the pixied command.
+# Interprets the first argument as a command name and dispatches to the
+# matching handler.
+#
+# @arg $@ string The command name and its arguments
+# @exitcode 0 On success
+# @exitcode 2 When an unknown command is given
+# @see pixied_shell
+# @see pixied_run_command
+# @see pixied_install
+# @see pixied_hook
+# @see pixied_generate
+# @see pixied_uninstall
+# @see pixied_usage
+pixied_main() {
+    local command_name=${1:-}
+    case "$command_name" in
+    "")
+        pixied_shell
+        ;;
+    shell)
+        shift
+        pixied_shell "$@"
+        ;;
+    run)
+        shift
+        pixied_run_command "$@"
+        ;;
+    install)
+        shift
+        pixied_install "$@"
+        ;;
+    hook)
+        shift
+        pixied_hook "$@"
+        ;;
+    generate)
+        shift
+        pixied_generate "$@"
+        ;;
+    __runtime-state)
+        [ "$#" -eq 1 ] || pixied_die "internal runtime state command takes no arguments" "$PIXIED_EXIT_USAGE"
+        pixied_runtime_dump_state
+        ;;
+    __machine-id)
+        [ "$#" -eq 1 ] || pixied_die "internal machine id command takes no arguments" "$PIXIED_EXIT_USAGE"
+        pixied_machine_id
+        ;;
+    uninstall)
+        shift
+        pixied_uninstall "$@"
+        ;;
+    help | -h | --help) pixied_usage ;;
+    version | --version) printf 'pixied %s\n' "$PIXIED_VERSION" ;;
+    *) pixied_die "unknown command: $command_name" "$PIXIED_EXIT_USAGE" ;;
+    esac
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    pixied_main "$@"
+fi

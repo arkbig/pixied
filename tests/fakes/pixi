@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+case "${1:-}" in
+--version)
+    [ "${PIXIED_FAKE_PIXI_FAIL_VERSION:-0}" -eq 0 ] || exit 1
+    printf 'pixi 0.0.0-fake\n'
+    ;;
+global)
+    [ "${2:-}" = install ] || exit 2
+    shift 2
+    mkdir -p "${PIXI_HOME:?}/bin"
+    for package in "$@"; do
+        if [ "$package" = zellij ]; then
+            cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+case "${1:-}" in
+attach)
+    if [ -n "${PIXIED_FAKE_ZELLIJ_TOUCH:-}" ]; then
+        printf '%s\n' "${PIXIED_FAKE_ZELLIJ_CONTENT:-fake-session-change}" >"$PIXIED_FAKE_ZELLIJ_TOUCH"
+    fi
+    ;;
+list-sessions)
+    [ "${PIXIED_FAKE_ZELLIJ_LIST_FAIL:-0}" -eq 0 ] || exit 1
+    if [ "${PIXIED_FAKE_ZELLIJ_REMAINS:-0}" -eq 1 ]; then
+        printf '%s [Created]\n' "${PIXIED_FAKE_ZELLIJ_SESSION_NAME:-pixied-fake}"
+    fi
+    ;;
+esac
+SCRIPT
+        else
+            if [ "$package" = direnv ] && [ -n "${PIXIED_FAKE_DIRENV_LOG:-}" ]; then
+                cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s %s\n' "${1:-}" "${2:-}" >>"${PIXIED_FAKE_DIRENV_LOG:?}"
+if [ "${1:-}" = hook ]; then
+    printf ':\n'
+fi
+SCRIPT
+            else
+                cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 0
+SCRIPT
+            fi
+        fi
+        chmod 0755 "$PIXI_HOME/bin/$package"
+    done
+    ;;
+shell-hook)
+    printf 'export PIXIED_FAKE_PROJECT_HOOK=1\n'
+    ;;
+*)
+    printf 'unsupported fake pixi command: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac

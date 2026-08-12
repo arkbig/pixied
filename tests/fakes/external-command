@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+PIXIED_FAKE_NAME=$(basename "$0")
+readonly PIXIED_FAKE_NAME
+printf '%s %s\n' "$PIXIED_FAKE_NAME" "$*" >>"${PIXIED_COMMAND_LOG:?}"
+
+case "$PIXIED_FAKE_NAME" in
+pixi) printf 'pixi 0.0.0-fake\n' ;;
+zellij) ;;
+systemctl)
+    [ "${PIXIED_FAKE_SYSTEMCTL_FAIL:-0}" -eq 0 ] || exit 1
+    ;;
+loginctl)
+    if [ "${1:-}" = show-user ]; then
+        printf '%s\n' "${PIXIED_FAKE_LINGER:-no}"
+    fi
+    [ "${PIXIED_FAKE_LOGINCTL_FAIL:-0}" -eq 0 ] || exit 1
+    ;;
+sudo)
+    [ "${PIXIED_FAKE_SUDO_FAIL:-0}" -eq 0 ] || exit 1
+    if [ "${1:-}" = install ]; then
+        shift
+        /usr/bin/install "$@"
+    fi
+    ;;
+*)
+    printf 'unknown fake command: %s\n' "$PIXIED_FAKE_NAME" >&2
+    exit 2
+    ;;
+esac

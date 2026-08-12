@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Fake curl for tests: serves the official .sha256 asset from PIXIED_FAKE_SHA256
+# and rejects every other URL so tests stay offline.
+
+set -Eeuo pipefail
+
+output=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    -o)
+        output=$2
+        shift 2
+        ;;
+    --)
+        shift
+        break
+        ;;
+    *)
+        shift
+        ;;
+    esac
+done
+
+url=${1:-}
+
+case "$url" in
+https://api.github.com/repos/prefix-dev/pixi/releases/latest)
+    [ -n "$output" ] || {
+        printf 'fake curl: missing -o for %s\n' "$url" >&2
+        exit 2
+    }
+    printf '%s\n' "${PIXIED_FAKE_LATEST_RESPONSE:-{\"tag_name\":\"v0.99.0\"}}" >"$output"
+    ;;
+*.sha256)
+    [ -n "$output" ] || {
+        printf 'fake curl: missing -o for %s\n' "$url" >&2
+        exit 2
+    }
+    printf '%s  pixi-x86_64-unknown-linux-musl.tar.gz\n' "${PIXIED_FAKE_SHA256:?}" >"$output"
+    ;;
+*)
+    printf 'fake curl: unsupported URL: %s\n' "$url" >&2
+    exit 1
+    ;;
+esac
