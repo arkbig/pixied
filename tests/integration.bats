@@ -1939,14 +1939,20 @@ CASES
     local state="$PIXIED_TEST_ROOT/phase4-sync-state"
     local state_file="$state/pixied/machines/phase4-sync/state"
     local baseline="$state/pixied/machines/phase4-sync/sync-baseline"
-    local artifact
+    local artifact legacy_baseline
     mkdir -p "$home" "$local_home"
     printf 'account bashrc v1\n' >"$home/.bashrc"
     printf 'account bash profile v1\n' >"$home/.bash_profile"
+    printf 'account zshrc v1\n' >"$home/.zshrc"
+    printf 'account zprofile v1\n' >"$home/.zprofile"
+    printf 'local zlogin v1\n' >"$local_home/.zlogin"
+    printf 'local zlogout v1\n' >"$local_home/.zlogout"
     printf 'local profile v1\n' >"$local_home/.profile"
     printf 'local bash logout v1\n' >"$local_home/.bash_logout"
     printf 'account outside\n' >"$home/not-allowlisted"
     printf 'local outside\n' >"$local_home/not-allowlisted"
+    printf 'account zshenv\n' >"$home/.zshenv"
+    printf 'local zshenv\n' >"$local_home/.zshenv"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
@@ -1971,15 +1977,38 @@ CASES
     assert_equal 'account bashrc v1' "$(<"$local_home/.bashrc")"
     assert_equal 'account bash profile v1' "$(<"$home/.bash_profile")"
     assert_equal 'account bash profile v1' "$(<"$local_home/.bash_profile")"
+    assert_equal 'account zshrc v1' "$(<"$home/.zshrc")"
+    assert_equal 'account zshrc v1' "$(<"$local_home/.zshrc")"
+    assert_equal 'account zprofile v1' "$(<"$home/.zprofile")"
+    assert_equal 'account zprofile v1' "$(<"$local_home/.zprofile")"
+    assert_equal 'local zlogin v1' "$(<"$home/.zlogin")"
+    assert_equal 'local zlogin v1' "$(<"$local_home/.zlogin")"
+    assert_equal 'local zlogout v1' "$(<"$home/.zlogout")"
+    assert_equal 'local zlogout v1' "$(<"$local_home/.zlogout")"
     assert_equal 'local profile v1' "$(<"$home/.profile")"
     assert_equal 'local profile v1' "$(<"$local_home/.profile")"
     assert_equal 'local bash logout v1' "$(<"$home/.bash_logout")"
     assert_equal 'local bash logout v1' "$(<"$local_home/.bash_logout")"
     assert_equal 'account outside' "$(<"$home/not-allowlisted")"
     assert_equal 'local outside' "$(<"$local_home/not-allowlisted")"
+    assert_equal 'account zshenv' "$(<"$home/.zshenv")"
+    assert_equal 'local zshenv' "$(<"$local_home/.zshenv")"
     [ -f "$baseline" ] || pixied_test_fail "sync baseline was not created"
     grep -Fq -- '.bashrc=' "$baseline" || pixied_test_fail "baseline has no bashrc entry"
+    grep -Fq -- '.zshrc=' "$baseline" || pixied_test_fail "baseline has no zshrc entry"
     [ -f "$state_file" ] || pixied_test_fail "state file was not retained"
+
+    legacy_baseline="$baseline.legacy"
+    grep -E '^\.(bashrc|bash_profile|profile|bash_logout)=' "$baseline" >"$legacy_baseline"
+    mv -f "$legacy_baseline" "$baseline"
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID=phase4-sync \
+        bash "$data/pixied/bin/pixied" run bash -c 'exit 0'
+    assert_success
+    grep -Fq -- '.zshrc=' "$baseline" ||
+        pixied_test_fail "legacy baseline was not upgraded"
 
     printf 'account bashrc v2\n' >"$home/.bashrc"
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \

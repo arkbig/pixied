@@ -49,7 +49,7 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 - 対応するLinux環境で、利用者の権限だけで専用runtimeをインストールして利用できる。
 - Bashまたはzsh hookの評価後、専用の`HOME`、`PIXI_HOME`、`PATH`が有効になり、既存Pixi環境を参照しない。
 - `pixied run <command>`をTTYやZellijの有無にかかわらず実行でき、commandの終了statusを返す。
-- NFS modeの同期対象が4つのshell設定ファイルに限定され、起動前pullと正常終了後pushが行われる。
+- NFS modeの同期対象が8つのshell設定ファイルに限定され、起動前pullと正常終了後pushが行われる。
 - Zellijを選択した場合、`pixied shell`で既存セッションへ再接続するか、初回セッションを作成できる。
 - `pixied generate direnv`で、プロジェクトディレクトリに入ったときだけPixiEdenの専用Pixi上のプロジェクト環境を有効化できる。生成された`.envrc`は`pixied generate direnv --print-envrc`を評価し、runtime hookまたは`pixied shell`/`pixied run`のPATHを使い、それ以外では生成時のCLI絶対pathを使う。hookの評価だけではNFS同期やsession起動を行わない。
 - `pixied generate devcontainer`または`dockerfile`で、同じプロジェクトPixi環境をコンテナ内に構築できる。
@@ -57,7 +57,7 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 
 ## 再現範囲
 
-machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、生成した`.envrc`・DevContainer・Dockerfile、およびNFS modeで許可した4つのshell設定ファイルである。Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中session、machineごとのstateは共有せず、各machineで再構築する。
+machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、生成した`.envrc`・DevContainer・Dockerfile、およびNFS modeで許可した8つのshell設定ファイルである。Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中session、machineごとのstateは共有せず、各machineで再構築する。
 
 したがってPixiEdenが保証するのは「同じ定義から専用runtimeとプロジェクト環境を再構築できること」であり、別machineへZellijの画面や未同期の作業状態を移動することではない。Zellijの再接続は同じmachine上でsessionが残っている場合に限る。
 

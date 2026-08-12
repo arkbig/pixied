@@ -122,7 +122,7 @@ The `direnv` output enables the project Pixi environment only after entering the
 
 ## What Is Reproduced
 
-The following are reproduced between machines: PixiEden settings, the pinned Pixi version, project definitions, and generated project integration files. In `nfs` mode, four shell configuration files are also synchronized according to the allowlist. Pixi cache, resolved binaries, machine-local `PIXI_HOME`, running Zellij sessions, and machine-specific state are not shared between machines. Zellij reconnection works only when the session remains on the same machine.
+The following are reproduced between machines: PixiEden settings, the pinned Pixi version, project definitions, and generated project integration files. In `nfs` mode, some shell configuration files are also synchronized according to the allowlist. Pixi cache, resolved binaries, machine-local `PIXI_HOME`, running Zellij sessions, and machine-specific state are not shared between machines. Zellij reconnection works only when the session remains on the same machine.
 
 ## Operating Modes and Permissions
 
@@ -130,16 +130,16 @@ The following are reproduced between machines: PixiEden settings, the pinned Pix
 | --- | --- | --- | --- |
 | `local` | `none` | Dedicated runtime on the normal home, direnv, project Pixi, DevContainer/Docker generation | No systemd or sudo required |
 | `local` | `zellij` | The above, plus reconnection to a Zellij session on the same machine | Uses a persistent unit and linger when a systemd user manager and `loginctl` are available. Explicit confirmation is required if sudo is needed to change linger or WSL settings. Falls back to direct attach when unavailable |
-| `nfs` | `none` | Dedicated runtime on the machine-local home, four-file synchronization, direnv, project Pixi, DevContainer/Docker generation | A pre-created local home with the correct owner, write permission, and local filesystem conditions. No systemd or sudo required |
+| `nfs` | `none` | Dedicated runtime on the machine-local home, file synchronization, direnv, project Pixi, DevContainer/Docker generation | A pre-created local home with the correct owner, write permission, and local filesystem conditions. No systemd or sudo required |
 | `nfs` | `zellij` | The above, plus reconnection to a Zellij session on the same machine | Write permission for the local home. Uses a persistent unit and linger when a systemd user manager and `loginctl` are available. Falls back to direct attach when unavailable. Explicit confirmation is required if sudo is needed to change WSL settings or linger |
 
 With `none`, PixiEden does not detect, change, or start Zellij, systemd, `loginctl`, or linger. Even with `zellij`, it falls back to direct attach when systemd is unavailable. It does not provide a way to move a Zellij screen or unsynchronized work state to another machine.
 
 Create `PIXIED_LOCAL_HOME` in the environment before installing when using `nfs` mode. The specified path must be an existing directory owned and writable by the current user, separate from the account home, and verifiable as a canonical path on a local filesystem. PixiEden does not create the default candidate `/local/$USER` automatically. The `install` only validates the local home; it does not provide a subcommand for creating one.
 
-Creating the local home in advance does not disable NFS synchronization. In `nfs` mode, only `.bashrc`, `.bash_profile`, `.profile`, and `.bash_logout` directly under the home directory are synchronized between the account home and the local home.
+Creating the local home in advance does not disable NFS synchronization. In `nfs` mode, only `.bashrc`, `.bash_profile`, `.profile`, `.bash_logout`, `.zshrc`, `.zprofile`, `.zlogin`, and `.zlogout` directly under the home directory are synchronized between the account home and the local home.
 
-NFS mode synchronizes only `.bashrc`, `.bash_profile`, `.profile`, and `.bash_logout` directly under the home directory. The allowlist is pulled before `pixied shell` or `pixied run` launches, and pushed only when the child command or session exits with status 0. If both the account side and the local side contain different changes, PixiEden does not overwrite either side; it saves conflict artifacts under `PIXIED_STATE_DIR` and stops.
+NFS mode synchronizes only `.bashrc`, `.bash_profile`, `.profile`, `.bash_logout`, `.zshrc`, `.zprofile`, `.zlogin`, and `.zlogout` directly under the home directory. The allowlist is pulled before `pixied shell` or `pixied run` launches, and pushed only when the child command or session exits with status 0. If both the account side and the local side contain different changes, PixiEden does not overwrite either side; it saves conflict artifacts under `PIXIED_STATE_DIR` and stops.
 
 ### Recovering from Synchronization Errors
 
@@ -181,7 +181,7 @@ Uninstallation uses the dedicated `PIXI_HOME` recorded in the current state as i
 
 If the target Zellij session remains, uninstallation stops whether it is running through systemd or direct attach. End or detach the session and rerun `pixied uninstall`. If the session list cannot be retrieved, uninstallation also stops as a precaution.
 
-Finally, manually remove the PixiEden hook block from `~/.bashrc`. If the process is interrupted, rerun `pixied uninstall` as long as the launcher or deployed CLI remains available.
+Finally, manually remove the PixiEden hook block from the shell configuration file where it was added, such as `~/.bashrc` or `~/.zshrc`. If the process is interrupted, rerun `pixied uninstall` as long as the launcher or deployed CLI remains available.
 
 ## Paths and XDG Support
 

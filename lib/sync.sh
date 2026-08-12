@@ -10,7 +10,10 @@ if [ -n "${PIXIED_SYNC_LOADED:-}" ]; then
 fi
 PIXIED_SYNC_LOADED=1
 
-readonly PIXIED_SYNC_ALLOWLIST=(.bashrc .bash_profile .profile .bash_logout)
+readonly PIXIED_SYNC_ALLOWLIST=(
+    .bashrc .bash_profile .profile .bash_logout
+    .zshrc .zprofile .zlogin .zlogout
+)
 declare -gA PIXIED_SYNC_BASELINE=()
 declare -gA PIXIED_SYNC_ACCOUNT_STATE=()
 declare -gA PIXIED_SYNC_LOCAL_STATE=()
@@ -128,8 +131,9 @@ pixied_sync_baseline_load() {
         PIXIED_SYNC_BASELINE["$item"]=$value
     done <"$baseline"
     for item in "${PIXIED_SYNC_ALLOWLIST[@]}"; do
-        [ -n "${seen[$item]+present}" ] ||
-            pixied_die "sync baseline item is missing: $item"
+        if [ -z "${seen[$item]+present}" ]; then
+            return 1
+        fi
     done
     return 0
 }

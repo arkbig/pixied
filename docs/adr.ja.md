@@ -56,7 +56,7 @@ NFS modeではaccount homeとmachine-local homeの間で必要なshell設定を�
 
 ### Decision
 
-同期対象を`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`に限定し、baselineを使った3-way比較で片側の変更だけを反映する。双方の変更が異なる場合は上書きしない。
+同期対象を`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`に限定し、baselineを使った3-way比較で片側の変更だけを反映する。`.zshenv`のように全zsh実行へ影響するファイルは対象外とする。双方の変更が異なる場合は上書きしない。
 
 ### Rejected alternatives
 

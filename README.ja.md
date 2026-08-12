@@ -119,7 +119,7 @@ pixied generate dockerfile
 
 ## 再現される範囲
 
-machine間で再現されるのは、PixiEdenの設定、固定Pixi version、プロジェクト定義、生成したプロジェクト連携ファイルです。NFS modeでは4つのshell設定ファイルもallowlistに従って同期されます。Pixi cache、解決済みバイナリ、machine-localな`PIXI_HOME`、実行中のZellij session、machineごとのstateはmachine間で共有されません。Zellijの再接続は、同じmachine上にsessionが残っている場合だけ行われます。
+machine間で再現されるのは、PixiEdenの設定、固定Pixi version、プロジェクト定義、生成したプロジェクト連携ファイルです。NFS modeではいくつかのshell設定ファイルもallowlistに従って同期されます。Pixi cache、解決済みバイナリ、machine-localな`PIXI_HOME`、実行中のZellij session、machineごとのstateはmachine間で共有されません。Zellijの再接続は、同じmachine上にsessionが残っている場合だけ行われます。
 
 ## 動作モードと権限
 
@@ -127,16 +127,16 @@ machine間で再現されるのは、PixiEdenの設定、固定Pixi version、�
 |---|---|---|---|
 |`local`|`none`|通常home上の専用runtime、direnv、プロジェクトPixi、DevContainer/Docker生成|systemd不要、sudo不要|
 |`local`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|systemd user managerと`loginctl`があれば永続unit・lingerを利用。lingerやWSL設定変更にsudoが必要な場合は明示確認。利用できなければdirect attach|
-|`nfs`|`none`|machine-local home上の専用runtime、4ファイル同期、direnv、プロジェクトPixi、DevContainer/Docker生成|事前に作成したlocal homeのowner・書込み権限・local filesystem条件。systemd不要、sudo不要|
+|`nfs`|`none`|machine-local home上の専用runtime、ファイル同期、direnv、プロジェクトPixi、DevContainer/Docker生成|事前に作成したlocal homeのowner・書込み権限・local filesystem条件。systemd不要、sudo不要|
 |`nfs`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|local homeの書込み権限。systemd user managerと`loginctl`があれば永続unit・lingerを利用。利用できなければdirect attach。WSL設定やlinger変更にsudoが必要な場合は明示確認|
 
 `none`ではZellij、systemd、`loginctl`、lingerを検出・変更・起動しません。`zellij`でもsystemdが利用できない場合はdirect attachへfallbackします。別machineへZellijの画面や未同期の作業状態を移動する機能は提供しません。
 
 `nfs`modeで使う`PIXIED_LOCAL_HOME`は、install前に環境側で作成してください。指定pathは既存directoryであり、current userがownerで書込み可能、account homeと分離され、canonical pathとして検証できるlocal filesystem上にある必要があります。既定候補の`/local/$USER`もPixiEdenは自動作成しません。`install`はlocal homeを検証するだけで、local home作成用のサブコマンドも提供しません。
 
-local homeを事前に作成してもNFS同期は無効になりません。`nfs`modeではhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`だけをaccount homeとlocal homeの間で同期します。
+local homeを事前に作成してもNFS同期は無効になりません。`nfs`modeではhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけをaccount homeとlocal homeの間で同期します。
 
-NFSモードの同期対象はhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`だけです。`pixied shell`または`pixied run`の起動前にallowlistをpullし、child commandまたはsessionがstatus 0で終了した場合だけpushします。account側とlocal側の双方が異なる変更を持つ場合は上書きせず、`PIXIED_STATE_DIR`配下に衝突artifactを保存して停止します。
+NFSモードの同期対象はhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけです。`pixied shell`または`pixied run`の起動前にallowlistをpullし、child commandまたはsessionがstatus 0で終了した場合だけpushします。account側とlocal側の双方が異なる変更を持つ場合は上書きせず、`PIXIED_STATE_DIR`配下に衝突artifactを保存して停止します。
 
 ### 同期エラーからの復旧
 
@@ -178,7 +178,7 @@ uninstallは、current stateに記録された専用`PIXI_HOME`を管理境界�
 
 対象のZellij sessionが残っている場合、systemd経由でもdirect attachでも削除を中止します。sessionを終了またはdetachしてから`pixied uninstall`を再実行してください。session一覧を取得できない場合も安全側に中止します。
 
-最後に、`~/.bashrc`からPixiEdenのhookブロックを手動で削除してください。途中で中断した場合も、ランチャーまたは配備済みCLIが残っていれば`pixied uninstall`を再実行できます。
+最後に、追加したshell設定ファイル（`~/.bashrc`または`~/.zshrc`など）からPixiEdenのhookブロックを手動で削除してください。途中で中断した場合も、ランチャーまたは配備済みCLIが残っていれば`pixied uninstall`を再実行できます。
 
 ## パスと XDG 対応
 

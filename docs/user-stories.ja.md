@@ -141,7 +141,7 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
    **Then**runtimeのlocal homeとPixi dataがmachine-local領域に配置される。
 2. **Given**NFS modeでUC-04またはUC-05を開始する
    **When**runtimeを開始する
-   **Then**`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`だけがpullされる。
+   **Then**`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけがpullされる。
 3. **Given**child commandまたはsessionがstatus `0`で終了する
    **When**runtimeを終了する
    **Then**allowlistの変更だけがaccount homeへpushされる。

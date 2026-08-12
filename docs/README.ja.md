@@ -39,7 +39,7 @@ state形式、runtime hook、unit、関数単位の入出力、詳細な失敗�
 
 `nfs`modeの`PIXIED_LOCAL_HOME`は、PixiEdenのinstall前に環境側で作成済みでなければならない。installはdirectoryの存在、owner、書込み権限、account homeとの分離、local filesystem条件を検証するが、directoryや親directoryを作成しない。既定候補の`/local/$USER`も同様に事前準備が必要である。
 
-local homeの作成状態はNFS同期の有無とは別である。`nfs`modeでは、account homeとlocal homeの間でhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`だけをallowlistに従って同期する。初期版にはlocal home作成用のサブコマンドを設けない。将来chezmoiを導入する場合のdotfiles所有権、NFS同期の廃止・代替・併用は、初期版とは別の設計判断と移行計画で扱う。
+local homeの作成状態はNFS同期の有無とは別である。`nfs`modeでは、account homeとlocal homeの間でhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけをallowlistに従って同期する。初期版にはlocal home作成用のサブコマンドを設けない。将来chezmoiを導入する場合のdotfiles所有権、NFS同期の廃止・代替・併用は、初期版とは別の設計判断と移行計画で扱う。
 
 ## 環境変数の分類
 
@@ -68,7 +68,7 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`lib/state.sh`|許可keyだけを扱うstate parser、path・値・hashの検証、lock、atomic write。|
 |`lib/pixi.sh`|専用Pixi binaryの取得・checksum検証、専用`PIXI_HOME`でのPixi実行、Global executableの検証。|
 |`lib/hook.sh`|Bash/zshからsourceできるruntime hookと、hookをsourceするshell codeの生成。|
-|`lib/sync.sh`|NFS modeの4ファイルallowlist、baseline、3-way判定、conflict artifact、clean exit後のpush。|
+|`lib/sync.sh`|NFS modeの8ファイルallowlist、baseline、3-way判定、conflict artifact、clean exit後のpush。|
 |`lib/session.sh`、`lib/systemd.sh`|child command、Zellij、systemd user unit、linger、WSL設定変更、direct attach fallback。|
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
 |`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
