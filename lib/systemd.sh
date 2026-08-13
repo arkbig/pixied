@@ -404,3 +404,19 @@ pixied_systemd_runtime_start() {
     pixied_run systemctl --user start "$unit_name" || return 1
     pixied_info "started persistent Zellij session: $session_name"
 }
+
+# @description Restart the persistent unit after its Zellij session was closed.
+# This handles the active oneshot-unit state left by a manually exited session.
+#
+# @arg $1 string The Zellij session name.
+# @exitcode 0 When systemd restarted the unit.
+# @exitcode 1 When the unit cannot be restarted.
+pixied_systemd_runtime_restart() {
+    local session_name=$1 unit_name
+    [ "${PIXIED_SESSION_MANAGER:-none}" = zellij ] || return 1
+    [ "${PIXIED_STATE[systemd_available]:-0}" -eq 1 ] || return 1
+    unit_name="pixied-${PIXIED_MACHINE_ID}.service"
+    pixied_systemd_user_manager_available || return 1
+    pixied_run systemctl --user restart "$unit_name" || return 1
+    return 0
+}

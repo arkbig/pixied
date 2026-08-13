@@ -867,6 +867,8 @@ CURL
     assert_success
     grep -Fq -- 'systemctl --user start pixied-phase5-active.service' "$log" ||
         pixied_test_fail "persistent systemd unit was not started"
+    grep -Fq -- 'systemctl --user restart pixied-phase5-active.service' "$log" ||
+        pixied_test_fail "stale persistent unit was not restarted"
     grep -Fq -- 'pixied/pixi/bin/zellij attach pixied-phase5-active' "$log" ||
         pixied_test_fail "runtime did not attach to the persisted session"
 }
