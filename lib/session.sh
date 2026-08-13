@@ -355,7 +355,7 @@ pixied_runtime_shell() {
         return $?
     fi
 
-    session_name="pixied-$PIXIED_MACHINE_ID"
+    session_name=pixied
     if pixied_systemd_runtime_start "$session_name"; then
         # A oneshot unit can remain active after its Zellij session was closed.
         # Restart it so the next shell recreates the missing persistent session.

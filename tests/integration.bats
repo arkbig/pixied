@@ -726,8 +726,10 @@ CURL
     [ -f "$unit" ] || pixied_test_fail "systemd unit is missing"
     grep -Fq -- 'Description=PixiEden Zellij session for phase5-unit' "$unit" ||
         pixied_test_fail "unit has the wrong machine description"
-    grep -Fq -- 'ExecStart='"$data/pixied/pixi/bin/zellij"' attach --create-background pixied-phase5-unit' "$unit" ||
+    grep -Fq -- 'ExecStart='"$data/pixied/pixi/bin/zellij"' attach --create-background pixied' "$unit" ||
         pixied_test_fail "unit does not start the dedicated Zellij session"
+    grep -Fq -- 'ExecStop=-'"$data/pixied/pixi/bin/zellij"' delete-session pixied' "$unit" ||
+        pixied_test_fail "unit does not delete the dedicated Zellij session"
     grep -Fq -- 'unit_path='"$unit" "$state_file" || pixied_test_fail "unit path was not persisted"
     grep -Eq -- '^unit_hash=[0-9a-f]{64}$' "$state_file" ||
         pixied_test_fail "unit hash was not persisted"
@@ -869,7 +871,7 @@ CURL
         pixied_test_fail "persistent systemd unit was not started"
     grep -Fq -- 'systemctl --user restart pixied-phase5-active.service' "$log" ||
         pixied_test_fail "stale persistent unit was not restarted"
-    grep -Fq -- 'pixied/pixi/bin/zellij attach pixied-phase5-active' "$log" ||
+    grep -Fq -- 'pixied/pixi/bin/zellij attach pixied' "$log" ||
         pixied_test_fail "runtime did not attach to the persisted session"
 }
 
@@ -1101,7 +1103,7 @@ CONF
         /dev/null
     assert_success
     assert_output --partial 'hook-finished'
-    grep -Fq -- "$data/pixied/pixi/bin/zellij attach --create pixied-$machine_id" "$log" ||
+    grep -Fq -- "$data/pixied/pixi/bin/zellij attach --create pixied" "$log" ||
         pixied_test_fail "interactive hook did not start the dedicated Zellij session"
 
     : >"$log"
@@ -1571,7 +1573,7 @@ CONF
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-active-session \
         PIXIED_FAKE_ZELLIJ_REMAINS=1 \
-        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied-phase6-active-session \
+        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
         bash "$data/pixied/bin/pixied" uninstall --yes
     assert_failure 1
     assert_output --partial 'managed Zellij session is active'
@@ -2187,7 +2189,7 @@ CASES
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID=phase4-detach \
         PIXIED_FAKE_ZELLIJ_REMAINS=1 \
-        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied-phase4-detach \
+        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
         PIXIED_FAKE_ZELLIJ_TOUCH="$local_home/.bashrc" \
         PIXIED_FAKE_ZELLIJ_CONTENT='detached-local' \
         script -qec "bash '$data/pixied/bin/pixied' shell" /dev/null

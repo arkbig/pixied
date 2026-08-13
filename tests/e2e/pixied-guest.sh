@@ -22,7 +22,7 @@ readonly COMMAND_BIN="$DATA_DIR/bin"
 readonly STATE_FILE="$STATE_DIR/machines/$MACHINE_ID/state"
 readonly UNIT_NAME="pixied-$MACHINE_ID.service"
 readonly UNIT="$REAL_HOME/.config/systemd/user/$UNIT_NAME"
-readonly SESSION_NAME="pixied-$MACHINE_ID"
+readonly SESSION_NAME=pixied
 
 export DEBIAN_FRONTEND=noninteractive
 

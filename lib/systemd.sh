@@ -216,8 +216,8 @@ Environment=PIXI_NO_PATH_UPDATE=1
 Environment=PATH=$unit_path
 Environment=PIXIED_RUNTIME_STATE_FILE=$unit_state
 Environment=PIXIED_SYSTEMD_UNIT_PATH=$unit_path_env
-ExecStart=$unit_bin attach --create-background pixied-$PIXIED_MACHINE_ID
-ExecStop=-$unit_bin delete-session pixied-$PIXIED_MACHINE_ID
+ExecStart=$unit_bin attach --create-background pixied
+ExecStop=-$unit_bin delete-session pixied
 
 [Install]
 WantedBy=default.target

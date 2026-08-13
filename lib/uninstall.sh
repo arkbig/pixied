@@ -633,7 +633,7 @@ pixied_uninstall_require_no_active_session() {
     pixied_state_has zellij_path || pixied_die "uninstall state is missing Zellij path"
     pixied_state_has zellij_hash || pixied_die "uninstall state is missing Zellij hash"
     pixied_validate_owned_path "${PIXIED_STATE[zellij_path]}" "${PIXIED_STATE[zellij_hash]}"
-    session_name="pixied-${PIXIED_STATE[machine_id]}"
+    session_name=pixied
     if ! sessions=$(pixied_run "${PIXIED_STATE[zellij_path]}" list-sessions --no-formatting 2>/dev/null); then
         pixied_die "could not inspect the managed Zellij session before uninstall"
     fi
