@@ -7,6 +7,8 @@ readonly PIXIED_SOURCE_DIR
 . "$PIXIED_SOURCE_DIR/lib/common.sh"
 # shellcheck source=lib/paths.sh
 . "$PIXIED_SOURCE_DIR/lib/paths.sh"
+# shellcheck source=lib/options.sh
+. "$PIXIED_SOURCE_DIR/lib/options.sh"
 pixied_enable_strict_mode
 
 pixied_install_local() {
@@ -24,6 +26,9 @@ pixied_install_local() {
         lib/generate.sh
         lib/uninstall.sh
     )
+    # Parse options before resolving deployment paths so CLI values such as
+    # --local-home are available during the bootstrap deployment.
+    pixied_options_parse "$@"
     # Deployment only needs the destination paths; install validates the selected
     # home mode after the interactive wizard has completed.
     pixied_resolve_paths 0

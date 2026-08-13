@@ -347,10 +347,11 @@ PYPROJECT
         >"$project/pixi.toml"
 
     run env -u PIXI_HOME HOME="$account_home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs \
-        PIXIED_LOCAL_HOME="$local_home" PIXIED_MACHINE_ID=project-hook-nfs \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=project-hook-nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$local_home" --yes
     assert_success
 
     run env HOME="$account_home" XDG_DATA_HOME="$data" \
