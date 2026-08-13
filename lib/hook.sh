@@ -50,13 +50,13 @@ RUNTIME_HEAD
     if [ -z "$machine_id" ]; then
         if ! machine_id=$(HOME="$account_home" PIXIED_ACCOUNT_HOME="$account_home" \
             PIXIED_STATE_DIR="$state_root" bash "$pixied_cli_path" __machine-id 2>/dev/null); then
-            printf '%s\n' '[pixied] WARN runtime machine identity is unavailable; run pixied install first.' >&2
+            printf '%s\n' '[pixied] WARN runtime machine identity is unavailable; run `pixied install` first.' >&2
             return 0
         fi
     fi
     case "$machine_id" in
     '' | .* | *[!A-Za-z0-9._-]*)
-        printf '%s\n' '[pixied] WARN runtime machine identity is invalid; run pixied install first.' >&2
+        printf '%s\n' '[pixied] WARN runtime machine identity is invalid; run `pixied install` first.' >&2
         return 0
         ;;
     esac
@@ -64,7 +64,7 @@ RUNTIME_HEAD
     if ! state_output=$(HOME="$account_home" PIXIED_ACCOUNT_HOME="$account_home" \
         PIXIED_MACHINE_ID="$machine_id" PIXIED_STATE_DIR="$state_root" \
         PIXIED_RUNTIME_STATE_FILE="$state_file" bash "$pixied_cli_path" __runtime-state 2>/dev/null); then
-        printf '%s\n' '[pixied] WARN runtime state is unavailable; run pixied install first.' >&2
+        printf '%s\n' '[pixied] WARN runtime state is unavailable; run `pixied install` first.' >&2
         return 0
     fi
     account_home=""
@@ -103,11 +103,11 @@ RUNTIME_HEAD
         [ -z "$local_home" ] || [ -z "$session_manager" ] || [ -z "$data_dir" ] ||
         [ -z "$config_dir" ] || [ -z "$state_dir" ] || [ -z "$command_bin" ] ||
         [ -z "$pixi_home" ] || [ -z "$pixi_binary_path" ] || [ -z "$direnv_path" ]; then
-        printf '%s\n' '[pixied] WARN runtime state is incomplete; run pixied install first.' >&2
+        printf '%s\n' '[pixied] WARN runtime state is incomplete; run `pixied install` first.' >&2
         return 0
     fi
     if [ "$session_manager" = zellij ] && [ -z "$zellij_path" ]; then
-        printf '%s\n' '[pixied] WARN runtime Zellij state is incomplete; run pixied install first.' >&2
+        printf '%s\n' '[pixied] WARN runtime Zellij state is incomplete; run `pixied install` first.' >&2
         return 0
     fi
 

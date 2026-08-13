@@ -185,7 +185,7 @@ pixied_runtime_load_state() {
     fi
 
     [ -f "$state_file" ] ||
-        pixied_die "PixiEden is not installed; run pixied install first"
+        pixied_die 'PixiEden is not installed; run `pixied install` first.'
     export PIXIED_STATE_FILE=$state_file
     pixied_state_load "$state_file"
     pixied_runtime_apply_state

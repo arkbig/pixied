@@ -141,13 +141,13 @@ assert_semver() {
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=phase3-cli \
         bash "$cli" shell
     assert_failure 1
-    assert_output --partial 'PixiEden is not installed; run pixied install first'
+    assert_output --partial 'PixiEden is not installed; run `pixied install` first'
 
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=phase3-cli \
         bash "$cli"
     assert_failure 1
-    assert_output --partial 'PixiEden is not installed; run pixied install first'
+    assert_output --partial 'PixiEden is not installed; run `pixied install` first'
 
     run bash "$cli" start
     assert_failure 2
