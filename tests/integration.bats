@@ -1397,7 +1397,7 @@ CURL
         pixied_test_fail "data was removed while the Zellij session was active"
 }
 
-@test "uninstall refuses when the managed Zellij session cannot be inspected" {
+@test "uninstall warns and continues when the managed Zellij session cannot be inspected" {
     local home="$PIXIED_TEST_ROOT/phase6-session-list-failure-home"
     local data="$PIXIED_TEST_ROOT/phase6-session-list-failure-data"
     local config="$PIXIED_TEST_ROOT/phase6-session-list-failure-config"
@@ -1415,10 +1415,12 @@ CURL
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-session-list-failure \
         PIXIED_FAKE_ZELLIJ_LIST_FAIL=1 \
         bash "$data/pixied/bin/pixied" uninstall --yes
-    assert_failure 1
+    assert_success
     assert_output --partial 'could not inspect the managed Zellij session'
-    [ -f "$state/pixied/machines/phase6-session-list-failure/state" ] ||
-        pixied_test_fail "state was removed when the Zellij session list failed"
+    [ ! -e "$state/pixied/machines/phase6-session-list-failure/state" ] ||
+        pixied_test_fail "state remains when the Zellij session list failed"
+    [ ! -e "$data/pixied" ] ||
+        pixied_test_fail "data remains when the Zellij session list failed"
 }
 
 # US-101-3

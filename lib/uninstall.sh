@@ -576,10 +576,10 @@ pixied_uninstall_confirm() {
 }
 
 # @description Refuse to remove resources while the managed Zellij session exists.
-# Direct attach leaves the session resident, so an unavailable session list also
-# blocks cleanup.
-# @exitcode 0 When no managed session is present.
-# @exitcode 1 When the session is active or cannot be inspected.
+# Direct attach leaves the session resident. If the session list is unavailable,
+# warn and continue because the user explicitly requested the uninstall.
+# @exitcode 0 When no managed session is present or inspection fails.
+# @exitcode 1 When the session is active or state validation fails.
 pixied_uninstall_require_no_active_session() {
     local session_name sessions line
     [ "${PIXIED_STATE[session_manager]}" = zellij ] || return 0
@@ -588,7 +588,8 @@ pixied_uninstall_require_no_active_session() {
     pixied_validate_owned_path "${PIXIED_STATE[zellij_path]}" "${PIXIED_STATE[zellij_hash]}"
     session_name=pixied
     if ! sessions=$(pixied_run "${PIXIED_STATE[zellij_path]}" list-sessions --no-formatting 2>/dev/null); then
-        pixied_die "could not inspect the managed Zellij session before uninstall"
+        pixied_warn "could not inspect the managed Zellij session before uninstall; continuing"
+        return 0
     fi
     while IFS= read -r line; do
         case "$line" in
