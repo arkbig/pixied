@@ -188,3 +188,7 @@ uninstallは、current stateに記録された専用`PIXI_HOME`を管理境界�
 ## ドキュメント案内
 
 [開発者向けドキュメント](docs/README.ja.md)
+
+## 類似ソフトウェア
+
+- [Duetbox](https://github.com/arkbig/duetbox): Devbox(Nix)ベースの開発環境構築ツール。Pixiよりパッケージ数が多いです。

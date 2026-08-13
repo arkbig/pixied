@@ -191,3 +191,7 @@ The `PIXIED_*` names shown here describe resolved paths; they are not supported 
 ## Documentation
 
 [Developer documentation](docs/README.ja.md) (Japanese)
+
+## Similar Software
+
+- [Duetbox](https://github.com/arkbig/duetbox): A Devbox (Nix) based development environment provisioning tool. It has more packages than Pixi.
