@@ -2057,9 +2057,8 @@ CASES
         pixied_resolve_paths
     ' bash "$PIXIED_REPO_ROOT"
     assert_failure 1
-    assert_output --partial "local home is not a directory: $local_home"
-    assert_output --partial "create it before installation"
-    assert_output --partial "mkdir -p $local_home"
+    assert_output --partial "selected NFS mode requires a local home"
+    assert_output --partial "mkdir -p -- '$local_home'"
     assert_output --partial "--local-home PATH"
 }
 

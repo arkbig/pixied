@@ -251,7 +251,7 @@ pixied_resolve_paths() {
         local_home=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
         if [ "$validate_home" -eq 1 ]; then
             if [ ! -d "$local_home" ]; then
-                pixied_path_fail "local home is not a directory: $local_home; create it before installation and make it writable and owned by the current user (for example: mkdir -p $local_home), or specify an existing directory with --local-home PATH"
+                pixied_path_fail "selected NFS mode requires a local home. Create it before installation and make it writable and owned by the current user (for example: mkdir -p -- '$local_home'), or rerun with --local-home PATH pointing to an existing directory"
             fi
             local_home=$(pixied_validate_home_directory "$local_home" "local home")
             [ "$local_home" != "$account_home" ] ||

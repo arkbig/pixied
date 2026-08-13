@@ -24,7 +24,9 @@ pixied_install_local() {
         lib/generate.sh
         lib/uninstall.sh
     )
-    pixied_resolve_paths 1
+    # Deployment only needs the destination paths; install validates the selected
+    # home mode after the interactive wizard has completed.
+    pixied_resolve_paths 0
     destination=$PIXIED_DATA_DIR
     if [ -e "$destination" ] || [ -L "$destination" ]; then
         created_data=0
