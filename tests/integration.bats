@@ -1,12 +1,13 @@
 #!/usr/bin/env bats
 
-# @description Initialize repository and shared temporary paths for this test file.
+# @description Initialize repository and isolated default environment for this test file.
 # @set PIXIED_REPO_ROOT string Absolute path to the repository root.
 # @set PIXIED_TEST_ROOT string Shared temporary directory for the test file.
 setup_file() {
     export PIXIED_REPO_ROOT
     PIXIED_REPO_ROOT=$(cd "$BATS_TEST_DIRNAME/.." && pwd)
     export PIXIED_TEST_ROOT="$BATS_FILE_TMPDIR"
+
     # Existing tests must never probe or mutate the host user manager.
     export PIXIED_SYSTEMD_USER_AVAILABLE=0
     # WSL-specific behavior is enabled only by tests that provide an isolated config path.
