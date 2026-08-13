@@ -220,7 +220,6 @@ pixied_machine_id() {
 # @set PIXIED_CONFIG_DIR string The config directory
 # @set PIXIED_STATE_DIR string The state directory
 # @set PIXIED_COMMAND_BIN string The command placement directory
-# @set PIXIED_SYSTEMD_USER_DIR string The systemd user directory
 # @set PIXIED_MACHINE_ID string The machine ID
 # @set PIXIED_MACHINE_STATE_DIR string The per-machine state directory
 # @set PIXIED_STATE_FILE string The state file path
@@ -231,7 +230,7 @@ pixied_machine_id() {
 # @see pixied_machine_id
 pixied_resolve_paths() {
     local account_home home_mode local_home data_home config_home state_home bin_home
-    local data_dir config_dir state_dir command_bin systemd_user_dir
+    local data_dir config_dir state_dir command_bin
 
     account_home=$(pixied_validate_home_directory "${HOME:-}" "account home")
     export PIXIED_ACCOUNT_HOME=$account_home
@@ -269,8 +268,6 @@ pixied_resolve_paths() {
     config_dir=$(pixied_validate_canonical_path "${PIXIED_CONFIG_DIR:-$config_home/pixied}")
     state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE_DIR:-$state_home/pixied}")
     command_bin=$(pixied_validate_canonical_path "${PIXIED_COMMAND_BIN:-$bin_home}")
-    systemd_user_dir=$(pixied_validate_canonical_path \
-        "${PIXIED_SYSTEMD_USER_DIR:-$config_home/systemd/user}")
 
     export PIXIED_HOME_MODE=$home_mode
     export PIXIED_LOCAL_HOME=$local_home
@@ -278,7 +275,6 @@ pixied_resolve_paths() {
     export PIXIED_CONFIG_DIR=$config_dir
     export PIXIED_STATE_DIR=$state_dir
     export PIXIED_COMMAND_BIN=$command_bin
-    export PIXIED_SYSTEMD_USER_DIR=$systemd_user_dir
     PIXIED_MACHINE_ID=$(pixied_machine_id)
     export PIXIED_MACHINE_ID
     export PIXIED_MACHINE_STATE_DIR="$state_dir/machines/$PIXIED_MACHINE_ID"

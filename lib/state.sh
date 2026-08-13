@@ -23,11 +23,9 @@ readonly PIXIED_STATE_KEY_ORDER=(
     home_mode
     local_home
     session_manager
-    use_sudo
     data_dir
     config_dir
     state_dir
-    systemd_user_dir
     command_bin
     pixi_home
     pixi_binary_path
@@ -40,13 +38,8 @@ readonly PIXIED_STATE_KEY_ORDER=(
     runtime_hook_hash
     launcher_path
     launcher_hash
-    unit_path
-    unit_hash
     created_data
     created_pixi_home
-    systemd_available
-    linger_enabled
-    created_linger
     sync_baseline
 )
 
@@ -62,13 +55,31 @@ pixied_state_known_key() {
     return 1
 }
 
+# @description Reject state keys from the removed host-service implementation.
+# @arg $1 string The state key to inspect.
+# @exitcode 0 When the key belongs to the obsolete state format.
+# @exitcode 1 When the key is not obsolete.
+pixied_state_obsolete_key() {
+    case "$1" in
+    systemd_user_dir | unit_path | unit_hash | systemd_available | linger_enabled | created_linger) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+# @description Fail with an actionable message for an obsolete state file.
+# @arg $1 string The obsolete state key.
+# @exitcode 1 Always.
+pixied_state_reject_obsolete_key() {
+    pixied_die "obsolete state key: $1; reinstall PixiEden before continuing"
+}
+
 # @description Check whether the given key holds a path-format value.
 # @arg $1 string The key to check
 # @exitcode 0 When the key is a path-format key
 # @exitcode 1 Otherwise
 pixied_state_path_key() {
     case "$1" in
-    account_home | local_home | data_dir | config_dir | state_dir | systemd_user_dir | command_bin | pixi_home | pixi_binary_path | direnv_path | zellij_path | runtime_hook_path | launcher_path | unit_path | sync_baseline) return 0 ;;
+    account_home | local_home | data_dir | config_dir | state_dir | command_bin | pixi_home | pixi_binary_path | direnv_path | zellij_path | runtime_hook_path | launcher_path | sync_baseline) return 0 ;;
     *) return 1 ;;
     esac
 }
@@ -103,10 +114,10 @@ pixied_state_validate_value() {
     session_manager)
         case "$value" in none | zellij) ;; *) pixied_die "invalid state session manager: $value" ;; esac
         ;;
-    use_sudo | created_data | created_pixi_home | systemd_available | linger_enabled | created_linger)
+    created_data | created_pixi_home)
         case "$value" in 0 | 1) ;; *) pixied_die "invalid state creation flag: $key" ;; esac
         ;;
-    pixi_binary_hash | direnv_hash | zellij_hash | runtime_hook_hash | launcher_hash | unit_hash)
+    pixi_binary_hash | direnv_hash | zellij_hash | runtime_hook_hash | launcher_hash)
         [ -z "$value" ] || [[ "$value" =~ ^[0-9a-f]{64}$ ]] ||
             pixied_die "invalid state hash: $key"
         ;;
@@ -211,18 +222,13 @@ pixied_state_initialize_from_paths() {
     pixied_state_set home_mode "$PIXIED_HOME_MODE"
     pixied_state_set local_home "$PIXIED_LOCAL_HOME"
     pixied_state_set session_manager "${PIXIED_SESSION_MANAGER:-zellij}"
-    pixied_state_set use_sudo "${PIXIED_USE_SUDO:-0}"
     pixied_state_set data_dir "$PIXIED_DATA_DIR"
     pixied_state_set config_dir "$PIXIED_CONFIG_DIR"
     pixied_state_set state_dir "$PIXIED_STATE_DIR"
-    pixied_state_set systemd_user_dir "$PIXIED_SYSTEMD_USER_DIR"
     pixied_state_set command_bin "$PIXIED_COMMAND_BIN"
     pixied_state_set pixi_home "$PIXIED_PIXI_HOME"
     pixied_state_set created_data 0
     pixied_state_set created_pixi_home 0
-    pixied_state_set systemd_available 0
-    pixied_state_set linger_enabled 0
-    pixied_state_set created_linger 0
     pixied_state_set sync_baseline "$PIXIED_MACHINE_STATE_DIR/sync-baseline"
 }
 
@@ -391,7 +397,10 @@ pixied_state_load() {
         esac
         key=${line%%=*}
         value=${line#*=}
-        pixied_state_known_key "$key" || pixied_die "unknown state key: $key"
+        if ! pixied_state_known_key "$key"; then
+            pixied_state_obsolete_key "$key" && pixied_state_reject_obsolete_key "$key"
+            pixied_die "unknown state key: $key"
+        fi
         pixied_state_has "$key" && pixied_die "duplicate state key: $key"
         pixied_state_set "$key" "$value"
     done <"$state_file"
@@ -421,7 +430,10 @@ pixied_state_load_external() {
         esac
         key=${line%%=*}
         value=${line#*=}
-        pixied_state_known_key "$key" || pixied_die "unknown state key: $key"
+        if ! pixied_state_known_key "$key"; then
+            pixied_state_obsolete_key "$key" && pixied_state_reject_obsolete_key "$key"
+            pixied_die "unknown state key: $key"
+        fi
         pixied_state_has "$key" && pixied_die "duplicate state key: $key"
         pixied_state_set "$key" "$value"
     done <"$state_file"

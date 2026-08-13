@@ -160,7 +160,7 @@ pixied_uninstall_paths_overlap() {
 pixied_uninstall_validate_current_state() {
     local expected path hash kind left_name right_name check
     local root_index other_index
-    local -a root_names=(data_dir config_dir state_dir command_bin systemd_user_dir)
+    local -a root_names=(data_dir config_dir state_dir command_bin)
     local -a checks=()
 
     pixied_uninstall_require_path_match state_dir "${PIXIED_STATE[state_dir]}" "$PIXIED_STATE_DIR"
@@ -197,12 +197,6 @@ pixied_uninstall_validate_current_state() {
         pixied_uninstall_require_path_match zellij_path \
             "${PIXIED_STATE[zellij_path]}" "$expected"
     fi
-    if pixied_state_has unit_path; then
-        expected="${PIXIED_STATE[systemd_user_dir]}/pixied-${PIXIED_STATE[machine_id]}.service"
-        pixied_uninstall_require_path_match unit_path \
-            "${PIXIED_STATE[unit_path]}" "$expected"
-    fi
-
     case "${PIXIED_STATE[home_mode]}" in
     local)
         expected="${PIXIED_STATE[data_dir]}/pixi"
@@ -247,9 +241,6 @@ pixied_uninstall_validate_current_state() {
     fi
     if pixied_state_has launcher_path && pixied_state_has launcher_hash; then
         checks+=("${PIXIED_STATE[launcher_path]}|file|${PIXIED_STATE[launcher_hash]}")
-    fi
-    if pixied_state_has unit_path && pixied_state_has unit_hash; then
-        checks+=("${PIXIED_STATE[unit_path]}|file|${PIXIED_STATE[unit_hash]}")
     fi
     checks+=("${PIXIED_STATE[sync_baseline]}|file" "${PIXIED_STATE_FILE}|file")
 
@@ -417,10 +408,6 @@ pixied_uninstall_prepare_targets() {
                 "${PIXIED_STATE[launcher_hash]}" file
         fi
     fi
-    if pixied_state_has unit_path && pixied_state_has unit_hash; then
-        pixied_uninstall_add_target "${PIXIED_STATE[unit_path]}" \
-            "${PIXIED_STATE[unit_hash]}" file
-    fi
     pixied_uninstall_add_target "${PIXIED_STATE[sync_baseline]}" "" file
     pixied_uninstall_add_target "$PIXIED_STATE_FILE" "" file
 }
@@ -548,7 +535,6 @@ pixied_uninstall_purge_stale_quarantines() {
         "${PIXIED_STATE[pixi_home]%/*}"
         "${PIXIED_STATE[pixi_home]}"
         "${PIXIED_STATE[command_bin]}"
-        "${PIXIED_STATE[systemd_user_dir]}"
         "$PIXIED_MACHINE_STATE_DIR"
     )
     for parent in "${parents[@]}"; do
@@ -589,41 +575,8 @@ pixied_uninstall_confirm() {
     esac
 }
 
-# @description Stop the managed systemd unit before removing its unit file.
-# A unit is touched only when the saved state says PixiEden activated the user
-# manager. An unavailable manager blocks cleanup rather than deleting a live unit.
-# @exitcode 0 When no unit is managed or it was stopped.
-# @exitcode 1 When the unit cannot be stopped.
-pixied_uninstall_stop_unit() {
-    local unit_name
-    [ "${PIXIED_STATE[session_manager]}" = zellij ] || return 0
-    [ "${PIXIED_STATE[systemd_available]:-0}" -eq 1 ] || return 0
-    unit_name="pixied-${PIXIED_STATE[machine_id]}.service"
-    if ! pixied_systemd_user_manager_available; then
-        pixied_die "systemd user manager is unavailable; cannot safely stop $unit_name"
-    fi
-    pixied_run systemctl --user disable --now "$unit_name" ||
-        pixied_die "could not stop managed systemd unit: $unit_name"
-}
-
-# @description Disable lingering only when this installation enabled it.
-# @exitcode 0 When lingering needs no change or was disabled.
-# @exitcode 1 When the sudo gate or command fails.
-pixied_uninstall_disable_linger() {
-    local user_name
-    [ "${PIXIED_STATE[session_manager]}" = zellij ] || return 0
-    [ "${PIXIED_STATE[created_linger]:-0}" -eq 1 ] || return 0
-    user_name=${USER:-}
-    [ -n "$user_name" ] || user_name=$(pixied_run id -un)
-    pixied_systemd_confirm_sudo "disable user lingering for $user_name" ||
-        pixied_die "user lingering disable was declined"
-    pixied_run sudo loginctl disable-linger "$user_name" ||
-        pixied_die "could not disable user lingering for $user_name"
-}
-
 # @description Refuse to remove resources while the managed Zellij session exists.
-# Systemd stop only covers the service-owned path; direct attach and a runtime
-# fallback can leave the session resident, so an unavailable session list also
+# Direct attach leaves the session resident, so an unavailable session list also
 # blocks cleanup.
 # @exitcode 0 When no managed session is present.
 # @exitcode 1 When the session is active or cannot be inspected.
@@ -771,9 +724,7 @@ pixied_uninstall_run() {
     pixied_uninstall_prepare_targets
     pixied_uninstall_confirm || pixied_die "uninstall was not confirmed"
     pixied_uninstall_purge_stale_quarantines
-    pixied_uninstall_stop_unit
     pixied_uninstall_require_no_active_session
-    pixied_uninstall_disable_linger
     pixied_step "Removing the PixiEden installation for $PIXIED_MACHINE_ID"
     pixied_uninstall_quarantine_targets
     pixied_success "PixiEden installation removed for $PIXIED_MACHINE_ID"

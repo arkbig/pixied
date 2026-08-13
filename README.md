@@ -58,7 +58,7 @@ fi
 
 For zsh, add the same block to `~/.zshrc` and replace `hook bash` with `hook zsh`.
 
-When you open a new terminal or SSH session, PixiEden switches to the local home when needed and enables Pixi Global. When Zellij is enabled, it connects to a persistent Zellij session managed by a machine-id-specific unit if a systemd user manager is available; otherwise, it falls back to direct attach.
+When you open a new terminal or SSH session, PixiEden switches to the local home when needed and enables Pixi Global. When Zellij is enabled, it launches or attaches directly to the dedicated `pixied` Zellij session from inside the PixiEden runtime. The parent shell environment, including `SSH_AUTH_SOCK`, is inherited naturally.
 
 ## Installation Settings
 
@@ -66,10 +66,9 @@ Settings are resolved in this order: CLI arguments, supported environment variab
 
 - Home mode: `local` if `df -l` confirms a local filesystem; otherwise `nfs`.
 - Local home: A pre-created machine-local path used at runtime in `nfs` mode.
-- Session manager installation: The default is `zellij`. Selecting `none` skips Zellij, the systemd user service, and linger configuration. Environments without a systemd user manager fall back to direct attach.
-- Sudo usage: WSL systemd settings or linger configuration may require sudo. PixiEden displays the proposed changes and asks for explicit confirmation; it does not run sudo if confirmation is denied. These are confirmations immediately before actual changes, not settings selections.
+- Session manager: The default is `zellij`. Selecting `none` starts a dedicated interactive Bash inside the PixiEden runtime. Selecting `zellij` directly attaches to the dedicated `pixied` session.
 
-PixiEden may ask for confirmation when it continues using a dedicated non-local Pixi home, makes WSL or linger changes with sudo, or uninstalls managed resources. `--yes` skips only these confirmations; it does not skip path, owner, hash, or machine-id validation.
+PixiEden may ask for confirmation when it continues using a dedicated non-local Pixi home or uninstalls managed resources. `--yes` skips only these confirmations; it does not skip path, owner, hash, or machine-id validation.
 
 When the session manager is disabled, a normal shell starts after the environment is installed. Reinstall with the following command when you need automatic attachment and persistent terminal work:
 
@@ -84,11 +83,10 @@ To provide settings in advance and skip confirmation, run:
   --home-mode nfs \
   --local-home /scratch/$USER \
   --session-manager none \
-  --use-sudo no \
   --yes
 ```
 
-Use `PIXIED_HOME_MODE`, `PIXIED_LOCAL_HOME`, `PIXIED_SESSION_MANAGER`, and `PIXIED_USE_SUDO` to provide settings through environment variables. `PIXIED_SESSION_MANAGER` accepts `zellij` or `none`. Add `--yes` to skip confirmation.
+Use `PIXIED_HOME_MODE`, `PIXIED_LOCAL_HOME`, and `PIXIED_SESSION_MANAGER` to provide settings through environment variables. `PIXIED_SESSION_MANAGER` accepts `zellij` or `none`. Add `--yes` to skip confirmation.
 
 Use `PIXIED_PIXI_VERSION` to specify the Pixi version. When it is not set, PixiEden uses a pinned version and verifies it with a built-in digest. When a version or `latest` is specified, PixiEden uses the Release selected by the user and uses the official checksum from that same Release to detect download corruption or mix-ups. Set `PIXIED_PIXI_SHA256` to override the checksum when you need to pin it explicitly.
 
@@ -128,12 +126,12 @@ The following are reproduced between machines: PixiEden settings, the pinned Pix
 
 | home mode | session manager | Guaranteed features | Required conditions and permissions |
 | --- | --- | --- | --- |
-| `local` | `none` | Dedicated runtime on the normal home, direnv, project Pixi, DevContainer/Docker generation | No systemd or sudo required |
-| `local` | `zellij` | The above, plus reconnection to a Zellij session on the same machine | Uses a persistent unit and linger when a systemd user manager and `loginctl` are available. Explicit confirmation is required if sudo is needed to change linger or WSL settings. Falls back to direct attach when unavailable |
-| `nfs` | `none` | Dedicated runtime on the machine-local home, file synchronization, direnv, project Pixi, DevContainer/Docker generation | A pre-created local home with the correct owner, write permission, and local filesystem conditions. No systemd or sudo required |
-| `nfs` | `zellij` | The above, plus reconnection to a Zellij session on the same machine | Write permission for the local home. Uses a persistent unit and linger when a systemd user manager and `loginctl` are available. Falls back to direct attach when unavailable. Explicit confirmation is required if sudo is needed to change WSL settings or linger |
+| `local` | `none` | Dedicated runtime on the normal home, direnv, project Pixi, DevContainer/Docker generation | |
+| `local` | `zellij` | The above, plus reconnection to a Zellij session on the same machine | Direct attach from the PixiEden runtime. |
+| `nfs` | `none` | Dedicated runtime on the machine-local home, file synchronization, direnv, project Pixi, DevContainer/Docker generation | A pre-created local home with the correct owner, write permission, and local filesystem conditions. |
+| `nfs` | `zellij` | The above, plus reconnection to a Zellij session on the same machine | Write permission for the local home. Direct attach from the PixiEden runtime. |
 
-With `none`, PixiEden does not detect, change, or start Zellij, systemd, `loginctl`, or linger. Even with `zellij`, it falls back to direct attach when systemd is unavailable. It does not provide a way to move a Zellij screen or unsynchronized work state to another machine.
+With `none`, PixiEden starts a dedicated interactive Bash and does not start Zellij. With `zellij`, `pixied shell` and the generated hook directly run `zellij attach --create pixied` inside the runtime. An active managed Zellij session prevents uninstall until it exits. PixiEden does not provide a way to move a Zellij screen or unsynchronized work state to another machine.
 
 Create `PIXIED_LOCAL_HOME` in the environment before installing when using `nfs` mode. The specified path must be an existing directory owned and writable by the current user, separate from the account home, and verifiable as a canonical path on a local filesystem. PixiEden does not create the default candidate `/local/$USER` automatically. The `install` only validates the local home; it does not provide a subcommand for creating one.
 
@@ -164,8 +162,7 @@ Do not delete the lock while a process is running, and do not run `rm -rf` on th
 ## Requirements
 
 - Ubuntu or a compatible `Linux` environment with `bash`, `curl` or `wget`, and `tar` available.
-- When the session manager is enabled on WSL2, systemd must be enabled. When it is disabled, PixiEden displays a proposed change to `/etc/wsl.conf` and, with explicit confirmation and sudo permission, merges `[boot] systemd=true`. It does not start a session in the same run; manually run `wsl --shutdown` and rerun `pixied install`.
-- When the session manager is enabled, PixiEden prepares a machine-id-specific user unit and linger when a systemd user manager and `loginctl` are available. When they are unavailable, it displays diagnostics and falls back to direct attach. When the session manager is disabled, it does not detect, change, or start any of them.
+- Zellij is required only when the session manager is `zellij`; it is launched directly inside the PixiEden runtime.
 
 ## Uninstallation
 
@@ -175,11 +172,9 @@ Run:
 pixied uninstall
 ```
 
-When the session manager was enabled, PixiEden displays the systemd user service it created and the linger setting it enabled, then asks for confirmation before disabling them. Use `--yes` to approve the confirmation automatically.
-
 Uninstallation uses the dedicated `PIXI_HOME` recorded in the current state as its management boundary. A dedicated `PIXI_HOME` newly created by PixiEden and not shared with other machines can be cleaned up directory-wide after validating its path, owner, and state. For an existing path or a path shared with another machine, PixiEden cleans up only executables whose recorded hashes match the state, so shared Pixi metadata, manifests, `envs/`, and other files may remain. PixiEden does not determine ownership at the package level and does not guarantee removal of only the Global packages added by the current installation.
 
-If the target Zellij session remains, uninstallation stops whether it is running through systemd or direct attach. End or detach the session and rerun `pixied uninstall`. If the session list cannot be retrieved, uninstallation also stops as a precaution.
+If the target managed Zellij session remains, uninstallation stops. End or detach the session and rerun `pixied uninstall`. If the session list cannot be retrieved, uninstallation also stops as a precaution.
 
 Finally, manually remove the PixiEden hook block from the shell configuration file where it was added, such as `~/.bashrc` or `~/.zshrc`. If the process is interrupted, rerun `pixied uninstall` as long as the launcher or deployed CLI remains available.
 

@@ -46,7 +46,7 @@ pixied_runtime_set_identity() {
 pixied_runtime_apply_state() {
     local key
     for key in state_version machine_id account_home home_mode local_home session_manager \
-        data_dir config_dir state_dir systemd_user_dir command_bin pixi_home pixi_binary_path \
+        data_dir config_dir state_dir command_bin pixi_home pixi_binary_path \
         pixi_binary_hash direnv_path direnv_hash runtime_hook_path runtime_hook_hash \
         sync_baseline; do
         pixied_state_has "$key" || pixied_die "runtime state key is missing: $key"
@@ -57,11 +57,9 @@ pixied_runtime_apply_state() {
     export PIXIED_HOME_MODE=${PIXIED_STATE[home_mode]}
     export PIXIED_LOCAL_HOME=${PIXIED_STATE[local_home]}
     export PIXIED_SESSION_MANAGER=${PIXIED_STATE[session_manager]}
-    export PIXIED_USE_SUDO=${PIXIED_STATE[use_sudo]:-0}
     export PIXIED_DATA_DIR=${PIXIED_STATE[data_dir]}
     export PIXIED_CONFIG_DIR=${PIXIED_STATE[config_dir]}
     export PIXIED_STATE_DIR=${PIXIED_STATE[state_dir]}
-    export PIXIED_SYSTEMD_USER_DIR=${PIXIED_STATE[systemd_user_dir]}
     export PIXIED_COMMAND_BIN=${PIXIED_STATE[command_bin]}
     export PIXIED_PIXI_HOME=${PIXIED_STATE[pixi_home]}
     export PIXIED_PIXI_BINARY_PATH=${PIXIED_STATE[pixi_binary_path]}
@@ -103,10 +101,6 @@ pixied_runtime_validate_state() {
         "${PIXIED_STATE[state_dir]}/machines/${PIXIED_STATE[machine_id]}/sync-baseline")
     [ "${PIXIED_STATE[sync_baseline]}" = "$expected" ] ||
         pixied_die "runtime sync baseline path is outside the machine state directory"
-    expected=$(pixied_canonical_path "${PIXIED_STATE[systemd_user_dir]}")
-    [ "${PIXIED_STATE[systemd_user_dir]}" = "$expected" ] ||
-        pixied_die "runtime systemd user directory is not canonical"
-
     [ -n "${PIXIED_STATE[pixi_binary_hash]}" ] ||
         pixied_die "runtime Pixi binary hash is missing"
     [ -n "${PIXIED_STATE[direnv_hash]}" ] ||
@@ -356,20 +350,7 @@ pixied_runtime_shell() {
     fi
 
     session_name=pixied
-    if pixied_systemd_runtime_start "$session_name"; then
-        # A oneshot unit can remain active after its Zellij session was closed.
-        # Restart it so the next shell recreates the missing persistent session.
-        if pixied_sync_zellij_session_status "$session_name"; then
-            :
-        elif [ "$?" -eq 1 ] && pixied_systemd_runtime_restart "$session_name"; then
-            pixied_info "restarted persistent Zellij session: $session_name"
-        fi
-        if pixied_runtime_wait_for_child "$PIXIED_ZELLIJ_PATH" attach "$session_name"; then
-            child_status=$PIXIED_EXIT_OK
-        else
-            child_status=$?
-        fi
-    elif pixied_runtime_wait_for_child "$PIXIED_ZELLIJ_PATH" attach --create "$session_name"; then
+    if pixied_runtime_wait_for_child "$PIXIED_ZELLIJ_PATH" attach --create "$session_name"; then
         child_status=$PIXIED_EXIT_OK
     else
         child_status=$?

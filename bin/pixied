@@ -35,8 +35,6 @@ readonly PIXIED_ROOT
 . "$PIXIED_ROOT/lib/pixi.sh"
 # shellcheck source=lib/sync.sh
 . "$PIXIED_ROOT/lib/sync.sh"
-# shellcheck source=lib/systemd.sh
-. "$PIXIED_ROOT/lib/systemd.sh"
 # shellcheck source=lib/session.sh
 . "$PIXIED_ROOT/lib/session.sh"
 # shellcheck source=lib/hook.sh
@@ -226,11 +224,9 @@ pixied_install() {
     pixied_state_set home_mode "$PIXIED_HOME_MODE"
     pixied_state_set local_home "$PIXIED_LOCAL_HOME"
     pixied_state_set session_manager "$PIXIED_SESSION_MANAGER"
-    pixied_state_set use_sudo "$PIXIED_USE_SUDO"
     pixied_state_set data_dir "$PIXIED_DATA_DIR"
     pixied_state_set config_dir "$PIXIED_CONFIG_DIR"
     pixied_state_set state_dir "$PIXIED_STATE_DIR"
-    pixied_state_set systemd_user_dir "$PIXIED_SYSTEMD_USER_DIR"
     pixied_state_set command_bin "$PIXIED_COMMAND_BIN"
     pixied_state_set pixi_home "$PIXIED_PIXI_HOME"
     pixied_state_set sync_baseline "$PIXIED_MACHINE_STATE_DIR/sync-baseline"
@@ -256,29 +252,6 @@ pixied_install() {
     pixied_state_set created_pixi_home "$created_pixi_home"
     pixied_hook_generate_runtime
     pixied_launcher_generate
-    pixied_state_write "$PIXIED_STATE_FILE"
-    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
-        PIXIED_SYSTEMD_UNIT_PATH=$(pixied_validate_canonical_path \
-            "$PIXIED_SYSTEMD_USER_DIR/pixied-$PIXIED_MACHINE_ID.service")
-        export PIXIED_SYSTEMD_UNIT_PATH
-        pixied_state_set unit_path "$PIXIED_SYSTEMD_UNIT_PATH"
-        pixied_state_set systemd_available 0
-        pixied_state_set linger_enabled 0
-        pixied_state_set created_linger 0
-        pixied_state_write "$PIXIED_STATE_FILE"
-    fi
-    pixied_systemd_prepare
-    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
-        pixied_state_set unit_path "$PIXIED_SYSTEMD_UNIT_PATH"
-        pixied_state_set unit_hash "$PIXIED_SYSTEMD_UNIT_HASH"
-        pixied_state_set systemd_available "${PIXIED_SYSTEMD_AVAILABLE:-0}"
-        pixied_state_set linger_enabled "${PIXIED_SYSTEMD_LINGER_ENABLED:-0}"
-        pixied_state_set created_linger "${PIXIED_SYSTEMD_CREATED_LINGER:-0}"
-    else
-        unset 'PIXIED_STATE[unit_path]' 'PIXIED_STATE[unit_hash]' \
-            'PIXIED_STATE[systemd_available]' 'PIXIED_STATE[linger_enabled]' \
-            'PIXIED_STATE[created_linger]'
-    fi
     pixied_state_write "$PIXIED_STATE_FILE"
     pixied_state_lock_release
     if [ "$state_exists" -eq 1 ]; then

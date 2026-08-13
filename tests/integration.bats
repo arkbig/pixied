@@ -8,9 +8,7 @@ setup_file() {
     PIXIED_REPO_ROOT=$(cd "$BATS_TEST_DIRNAME/.." && pwd)
     export PIXIED_TEST_ROOT="$BATS_FILE_TMPDIR"
 
-    # Existing tests must never probe or mutate the host user manager.
-    export PIXIED_SYSTEMD_USER_AVAILABLE=0
-    # WSL-specific behavior is enabled only by tests that provide an isolated config path.
+    # WSL-specific behavior is disabled because PixiEden does not manage system services.
     export PIXIED_WSL=0
 }
 
@@ -74,7 +72,7 @@ assert_output() {
 setup_fake_commands() {
     local fake_bin=$1 command_name
     mkdir -p "$fake_bin"
-    for command_name in pixi zellij systemctl loginctl sudo; do
+    for command_name in pixi zellij; do
         ln -s "$PIXIED_REPO_ROOT/tests/fakes/external-command" "$fake_bin/$command_name"
     done
 }
@@ -379,17 +377,14 @@ PYPROJECT
     assert_success
     assert_equal 'pixi 0.0.0-fake' "$output"
 
-    for command_name in zellij systemctl loginctl sudo; do
-        run env PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-            bash -c '. "$1/lib/common.sh"; pixied_run "$2"' \
-            bash "$PIXIED_REPO_ROOT" "$command_name"
-        assert_success
-    done
+    run env PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
+        bash -c '. "$1/lib/common.sh"; pixied_run zellij' bash "$PIXIED_REPO_ROOT"
+    assert_success
     grep -Fq -- 'pixi --version' "$log" || pixied_test_fail "missing pixi command log"
     grep -Fq -- 'zellij' "$log" || pixied_test_fail "missing zellij command log"
-    grep -Fq -- 'systemctl' "$log" || pixied_test_fail "missing systemctl command log"
-    grep -Fq -- 'loginctl' "$log" || pixied_test_fail "missing loginctl command log"
-    grep -Fq -- 'sudo' "$log" || pixied_test_fail "missing sudo command log"
+    if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
+        pixied_test_fail "system service commands were unexpectedly logged"
+    fi
 }
 
 @test "temporary paths are cleaned up" {
@@ -474,7 +469,7 @@ PYPROJECT
         PIXIED_COMMAND_LOG="$log" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" local none "" "$1" "" |
+        printf "%s\n" local none "$1" "" |
             script -qec "bash \"$2\" install" /dev/null
     ' bash "$machine_id" "$PIXIED_REPO_ROOT/bin/pixied"
     assert_success
@@ -703,15 +698,14 @@ CURL
         pixied_test_fail "zellij hash was not persisted"
 }
 
-@test "zellij mode writes an isolated systemd unit and records direct fallback" {
-    local home="$PIXIED_TEST_ROOT/phase5-unit-home"
-    local data="$PIXIED_TEST_ROOT/phase5-unit-data"
-    local config="$PIXIED_TEST_ROOT/phase5-unit-config"
-    local state="$PIXIED_TEST_ROOT/phase5-unit-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-unit-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-unit.log"
-    local unit="$config/systemd/user/pixied-phase5-unit.service"
-    local state_file="$state/pixied/machines/phase5-unit/state"
+@test "zellij mode avoids host service commands and persists no obsolete state" {
+    local home="$PIXIED_TEST_ROOT/phase5-direct-home"
+    local data="$PIXIED_TEST_ROOT/phase5-direct-data"
+    local config="$PIXIED_TEST_ROOT/phase5-direct-config"
+    local state="$PIXIED_TEST_ROOT/phase5-direct-state"
+    local fake_bin="$PIXIED_TEST_ROOT/phase5-direct-bin"
+    local log="$PIXIED_TEST_ROOT/phase5-direct.log"
+    local state_file="$state/pixied/machines/phase5-direct/state"
     mkdir -p "$home"
     setup_fake_commands "$fake_bin"
     : >"$log"
@@ -719,37 +713,28 @@ CURL
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-unit PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_MACHINE_ID=phase5-direct PIXIED_SESSION_MANAGER=zellij \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
-    [ -f "$unit" ] || pixied_test_fail "systemd unit is missing"
-    grep -Fq -- 'Description=PixiEden Zellij session for phase5-unit' "$unit" ||
-        pixied_test_fail "unit has the wrong machine description"
-    grep -Fq -- 'ExecStart='"$data/pixied/pixi/bin/zellij"' attach --create-background pixied' "$unit" ||
-        pixied_test_fail "unit does not start the dedicated Zellij session"
-    grep -Fq -- 'ExecStop=-'"$data/pixied/pixi/bin/zellij"' delete-session pixied' "$unit" ||
-        pixied_test_fail "unit does not delete the dedicated Zellij session"
-    grep -Fq -- 'Environment=PATH='"$home/.local/bin:$data/pixied/bin:$data/pixied/pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$unit" ||
-        pixied_test_fail "unit does not provide a complete non-interactive PATH"
-    grep -Fq -- 'unit_path='"$unit" "$state_file" || pixied_test_fail "unit path was not persisted"
-    grep -Eq -- '^unit_hash=[0-9a-f]{64}$' "$state_file" ||
-        pixied_test_fail "unit hash was not persisted"
-    grep -Fq -- 'systemd_available=0' "$state_file" ||
-        pixied_test_fail "direct fallback was not recorded"
+    [ ! -e "$config/systemd" ] || pixied_test_fail "host service files were created"
+    for obsolete_key in systemd_user_dir unit_path unit_hash systemd_available linger_enabled created_linger; do
+        if grep -Fq -- "$obsolete_key=" "$state_file"; then
+            pixied_test_fail "obsolete state key was persisted: $obsolete_key"
+        fi
+    done
     if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
-        pixied_test_fail "host session commands were unexpectedly called"
+        pixied_test_fail "host service commands were unexpectedly called"
     fi
 }
 
-@test "reinstall refuses a modified persisted systemd unit" {
-    local home="$PIXIED_TEST_ROOT/phase5-unit-reinstall-home"
-    local data="$PIXIED_TEST_ROOT/phase5-unit-reinstall-data"
-    local config="$PIXIED_TEST_ROOT/phase5-unit-reinstall-config"
-    local state="$PIXIED_TEST_ROOT/phase5-unit-reinstall-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-unit-reinstall-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-unit-reinstall.log"
-    local unit="$config/systemd/user/pixied-phase5-unit-reinstall.service"
+@test "direct shell attaches to the dedicated Zellij session" {
+    local home="$PIXIED_TEST_ROOT/phase5-shell-home"
+    local data="$PIXIED_TEST_ROOT/phase5-shell-data"
+    local config="$PIXIED_TEST_ROOT/phase5-shell-config"
+    local state="$PIXIED_TEST_ROOT/phase5-shell-state"
+    local fake_bin="$PIXIED_TEST_ROOT/phase5-shell-bin"
+    local log="$PIXIED_TEST_ROOT/phase5-shell.log"
     mkdir -p "$home"
     setup_fake_commands "$fake_bin"
     : >"$log"
@@ -757,193 +742,22 @@ CURL
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-unit-reinstall PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_MACHINE_ID=phase5-shell PIXIED_SESSION_MANAGER=zellij \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
-    printf '%s\n' 'tampered unit' >>"$unit"
 
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-unit-reinstall PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_failure
-    assert_output --partial "existing systemd unit is not managed by PixiEden"
-}
-
-@test "reinstall reuses the persisted systemd user directory after XDG config changes" {
-    local home="$PIXIED_TEST_ROOT/phase5-unit-xdg-home"
-    local data="$PIXIED_TEST_ROOT/phase5-unit-xdg-data"
-    local config_one="$PIXIED_TEST_ROOT/phase5-unit-xdg-config-one"
-    local config_two="$PIXIED_TEST_ROOT/phase5-unit-xdg-config-two"
-    local state="$PIXIED_TEST_ROOT/phase5-unit-xdg-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-unit-xdg-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-unit-xdg.log"
-    local unit_one="$config_one/systemd/user/pixied-phase5-unit-xdg.service"
-    local unit_two="$config_two/systemd/user/pixied-phase5-unit-xdg.service"
-    local state_file="$state/pixied/machines/phase5-unit-xdg/state"
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config_one" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-unit-xdg PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-shell \
+        bash -c '
+        printf "exit\\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell" /dev/null
+    ' "$data"
     assert_success
-    [ -f "$unit_one" ] || pixied_test_fail "initial systemd unit is missing"
-    grep -Fq -- "systemd_user_dir=$config_one/systemd/user" "$state_file" ||
-        pixied_test_fail "systemd user directory was not persisted"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config_two" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-unit-xdg PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_success
-    [ -f "$unit_one" ] || pixied_test_fail "persisted systemd unit was not reused"
-    [ ! -e "$unit_two" ] || pixied_test_fail "reinstall created a unit in the new XDG config directory"
-}
-
-@test "fresh install refuses a pre-existing systemd unit" {
-    local home="$PIXIED_TEST_ROOT/phase5-unit-existing-home"
-    local data="$PIXIED_TEST_ROOT/phase5-unit-existing-data"
-    local config="$PIXIED_TEST_ROOT/phase5-unit-existing-config"
-    local state="$PIXIED_TEST_ROOT/phase5-unit-existing-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-unit-existing-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-unit-existing.log"
-    local unit="$config/systemd/user/pixied-phase5-unit-existing.service"
-    mkdir -p "$home" "$config/systemd/user"
-    printf '%s\n' 'foreign unit' >"$unit"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-unit-existing PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_failure
-    assert_output --partial "existing systemd unit is not managed by PixiEden"
-    grep -Fq -- 'foreign unit' "$unit" ||
-        pixied_test_fail "pre-existing unit was overwritten"
-}
-
-# US-105-2
-@test "available systemd user manager starts the persisted session" {
-    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
-    local home="$PIXIED_TEST_ROOT/phase5-active-home"
-    local data="$PIXIED_TEST_ROOT/phase5-active-data"
-    local config="$PIXIED_TEST_ROOT/phase5-active-config"
-    local state="$PIXIED_TEST_ROOT/phase5-active-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-active-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-active.log"
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SYSTEMD_USER_AVAILABLE=1 PIXIED_FAKE_LINGER=yes \
-        PIXIED_MACHINE_ID=phase5-active PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_success
-    grep -Fq -- 'systemctl --user daemon-reload' "$log" ||
-        pixied_test_fail "systemd daemon reload was not requested"
-    grep -Fq -- 'systemctl --user enable pixied-phase5-active.service' "$log" ||
-        pixied_test_fail "machine-specific unit was not enabled"
-    grep -Fq -- 'linger_enabled=1' "$state/pixied/machines/phase5-active/state" ||
-        pixied_test_fail "existing linger state was not recorded"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SYSTEMD_USER_AVAILABLE=1 PIXIED_MACHINE_ID=phase5-active \
-        script -qec "bash '$data/pixied/bin/pixied' shell" /dev/null
-    assert_success
-    grep -Fq -- 'systemctl --user start pixied-phase5-active.service' "$log" ||
-        pixied_test_fail "persistent systemd unit was not started"
-    grep -Fq -- 'systemctl --user restart pixied-phase5-active.service' "$log" ||
-        pixied_test_fail "stale persistent unit was not restarted"
-    grep -Fq -- 'pixied/pixi/bin/zellij attach pixied' "$log" ||
-        pixied_test_fail "runtime did not attach to the persisted session"
-}
-
-@test "approved sudo enables lingering when loginctl cannot resolve the user" {
-    local home="$PIXIED_TEST_ROOT/phase5-unknown-linger-home"
-    local data="$PIXIED_TEST_ROOT/phase5-unknown-linger-data"
-    local config="$PIXIED_TEST_ROOT/phase5-unknown-linger-config"
-    local state="$PIXIED_TEST_ROOT/phase5-unknown-linger-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-unknown-linger-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-unknown-linger.log"
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SYSTEMD_USER_AVAILABLE=1 PIXIED_FAKE_LINGER=unknown \
-        PIXIED_USE_SUDO=1 PIXIED_MACHINE_ID=phase5-unknown-linger \
-        PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-    grep -Fq -- 'linger_enabled=1' \
-        "$state/pixied/machines/phase5-unknown-linger/state" ||
-        pixied_test_fail "unknown linger state was not enabled"
-    grep -Fq -- 'created_linger=1' \
-        "$state/pixied/machines/phase5-unknown-linger/state" ||
-        pixied_test_fail "created linger state was not recorded"
-    grep -Fq -- 'sudo loginctl enable-linger' "$log" ||
-        pixied_test_fail "unknown linger state did not use the approved sudo gate"
-}
-
-@test "approved linger and WSL systemd changes stay inside test paths" {
-    local home="$PIXIED_TEST_ROOT/phase5-wsl-home"
-    local data="$PIXIED_TEST_ROOT/phase5-wsl-data"
-    local config="$PIXIED_TEST_ROOT/phase5-wsl-config"
-    local state="$PIXIED_TEST_ROOT/phase5-wsl-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-wsl-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-wsl.log"
-    local wsl_conf="$PIXIED_TEST_ROOT/phase5-wsl.conf"
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-    cat >"$wsl_conf" <<'CONF'
-[boot]
-systemd=false
-
-[network]
-generateResolvConf=false
-customPath=C:\\temp\\name
-CONF
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SYSTEMD_USER_AVAILABLE=0 PIXIED_FAKE_LINGER=no \
-        PIXIED_WSL=1 PIXIED_WSL_CONF_PATH="$wsl_conf" PIXIED_USE_SUDO=1 \
-        PIXIED_MACHINE_ID=phase5-wsl PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-    grep -Fq -- 'systemd=true' "$wsl_conf" || pixied_test_fail "WSL systemd setting was not merged"
-    grep -Fq -- 'generateResolvConf=false' "$wsl_conf" ||
-        pixied_test_fail "unrelated WSL setting was not preserved"
-    grep -Fq -- 'customPath=C:\\temp\\name' "$wsl_conf" ||
-        pixied_test_fail "backslashes in unrelated WSL settings were not preserved"
-    grep -Fq -- 'sudo install' "$log" || pixied_test_fail "WSL update did not use the approved sudo gate"
-    if command grep -Eq -- '^(systemctl|loginctl) ' "$log"; then
-        pixied_test_fail "systemd commands ran before the required WSL restart"
+    grep -Fq -- "zellij attach --create pixied" "$log" ||
+        pixied_test_fail "shell did not directly attach to the dedicated session"
+    if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
+        pixied_test_fail "shell invoked a host service command"
     fi
 }
 
@@ -1089,7 +903,7 @@ CONF
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
-        PIXIED_SESSION_MANAGER=zellij PIXIED_SYSTEMD_USER_AVAILABLE=0 \
+        PIXIED_SESSION_MANAGER=zellij \
         PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
@@ -1289,8 +1103,8 @@ CONF
     grep -Eq -- '^pixi_binary_hash=[0-9a-f]{64}$' "$state_file" ||
         pixied_test_fail "checkpoint Pixi hash was not persisted"
 
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-recovery PIXIED_SESSION_MANAGER=none \
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase2-recovery PIXIED_SESSION_MANAGER=none \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_success
 }
@@ -1522,40 +1336,6 @@ CONF
     [ ! -e "$pending_data" ] || pixied_test_fail "stale data quarantine remains"
     [ ! -e "$state_file" ] || pixied_test_fail "restored state remains"
     [ ! -e "$pending_state" ] || pixied_test_fail "pending state quarantine remains"
-}
-
-@test "uninstall removes an owned systemd unit and created linger through fakes" {
-    local home="$PIXIED_TEST_ROOT/phase6-systemd-home"
-    local data="$PIXIED_TEST_ROOT/phase6-systemd-data"
-    local config="$PIXIED_TEST_ROOT/phase6-systemd-config"
-    local state="$PIXIED_TEST_ROOT/phase6-systemd-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase6-systemd-bin"
-    local log="$PIXIED_TEST_ROOT/phase6-systemd.log"
-    local unit="$config/systemd/user/pixied-phase6-systemd.service"
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SYSTEMD_USER_AVAILABLE=1 PIXIED_FAKE_LINGER=no PIXIED_USE_SUDO=1 \
-        PIXIED_MACHINE_ID=phase6-systemd PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-    [ -f "$unit" ] || pixied_test_fail "owned systemd unit was not created"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SYSTEMD_USER_AVAILABLE=1 PIXIED_MACHINE_ID=phase6-systemd \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        bash "$data/pixied/bin/pixied" uninstall --yes
-    assert_success
-    [ ! -e "$unit" ] || pixied_test_fail "owned systemd unit remains"
-    command grep -Fq -- 'systemctl --user disable --now pixied-phase6-systemd.service' "$log" ||
-        pixied_test_fail "managed systemd unit was not stopped"
-    command grep -Fq -- 'sudo loginctl disable-linger' "$log" ||
-        pixied_test_fail "created linger was not disabled"
 }
 
 @test "uninstall refuses an active direct-attach Zellij session" {
@@ -2324,6 +2104,20 @@ CASES
     assert_output --partial 'unknown state key: unknown'
 
     sed -i '/^unknown=value$/d' "$state_file"
+    printf 'unit_path=/run/user/1000/pixied.service\n' >>"$state_file"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" XDG_BIN_HOME="$bin" PIXIED_HOME_MODE=local \
+        PIXIED_MACHINE_ID=phase1-reject bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        pixied_state_load
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_failure 1
+    assert_output --partial 'obsolete state key: unit_path; reinstall PixiEden before continuing'
+
+    sed -i '/^unit_path=/d' "$state_file"
     mv "$state_file" "$state_file.real"
     ln -s "$state_file.real" "$state_file"
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \

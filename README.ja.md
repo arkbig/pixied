@@ -55,7 +55,7 @@ fi
 
 zshでは、同じブロックを`~/.zshrc`へ追加し、`hook bash`を`hook zsh`に置き換えます。
 
-新しいターミナルまたはSSHセッションを開くと、必要に応じてローカルホームへ切り替え、Pixi Globalを有効化します。Zellijを有効にした場合は、systemd user managerが利用できればmachine-id付きunitが管理する永続Zellijセッションへ接続し、利用できなければdirect attachへfallbackします。
+新しいターミナルまたはSSHセッションを開くと、必要に応じてローカルホームへ切り替え、Pixi Globalを有効化します。Zellijを有効にした場合は、PixiEden runtime内から専用の`pixied` Zellij sessionへ直接attachまたは作成します。
 
 ## インストール設定
 
@@ -63,10 +63,9 @@ zshでは、同じブロックを`~/.zshrc`へ追加し、`hook bash`を`hook zs
 
 - Home モード: `df -l`でローカルファイルシステムと確認できれば`local`、それ以外は`nfs`。
 - ローカルホーム: `nfs`モードで実行時に使う、事前に作成済みのmachine-localパス。
-- セッションマネージャのインストール: 既定値は`zellij`。`none`を選ぶとZellij、systemd user service、linger設定をスキップします。systemd user managerを利用できない環境ではdirect attachへfallbackします。
-- sudoの使用: WSLのsystemd設定やlinger設定でsudoが必要になる場合があります。PixiEdenは変更内容を表示してから明示確認を行い、拒否された場合はsudoを実行しません。これらは設定選択ではなく、実際の変更前の確認です。
+- セッションマネージャ: 既定値は`zellij`。`none`を選ぶとPixiEden runtime内で専用のinteractive Bashを起動します。`zellij`を選ぶと専用の`pixied` sessionへ直接attachします。
 
-PixiEdenは、非ローカルな専用Pixi homeを使い続ける場合、sudoを伴うWSL・linger変更を行う場合、管理対象をuninstallする場合に確認を求めることがあります。`--yes`はこれらの確認だけを省略し、path、owner、hash、machine-idの検証は省略しません。
+PixiEdenは、非ローカルな専用Pixi homeを使い続ける場合や、管理対象をuninstallする場合に確認を求めることがあります。`--yes`はこれらの確認だけを省略し、path、owner、hash、machine-idの検証は省略しません。
 
 セッションマネージャを無効にした場合、環境導入後は通常のシェルを起動します。自動接続とターミナル作業の永続化が必要になったら、次で再インストールしてください。
 
@@ -81,11 +80,10 @@ pixied install --session-manager zellij
   --home-mode nfs \
   --local-home /scratch/$USER \
   --session-manager none \
-  --use-sudo no \
   --yes
 ```
 
-環境変数で指定する場合は`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`、`PIXIED_USE_SUDO`を使います。`PIXIED_SESSION_MANAGER`には`zellij`または`none`を指定します。`--yes`を付けると確認を省略できます。
+環境変数で指定する場合は`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`を使います。`PIXIED_SESSION_MANAGER`には`zellij`または`none`を指定します。`--yes`を付けると確認を省略できます。
 
 Pixiのバージョンを指定する場合は`PIXIED_PIXI_VERSION`を使います。未指定時はPixiEdenが固定したバージョンを使い、組み込みdigestで検証します。versionを指定した場合や`latest`を指定した場合は、ユーザーが選択したReleaseを使い、同じReleaseから取得した公式checksumでダウンロード内容の破損・取り違えを検知します。チェックサムを明示的に固定したい場合は`PIXIED_PIXI_SHA256`で上書きできます。
 
@@ -125,12 +123,12 @@ machine間で再現されるのは、PixiEdenの設定、固定Pixi version、�
 
 |home mode|session manager|保証される機能|必要な条件・権限|
 |---|---|---|---|
-|`local`|`none`|通常home上の専用runtime、direnv、プロジェクトPixi、DevContainer/Docker生成|systemd不要、sudo不要|
-|`local`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|systemd user managerと`loginctl`があれば永続unit・lingerを利用。lingerやWSL設定変更にsudoが必要な場合は明示確認。利用できなければdirect attach|
-|`nfs`|`none`|machine-local home上の専用runtime、ファイル同期、direnv、プロジェクトPixi、DevContainer/Docker生成|事前に作成したlocal homeのowner・書込み権限・local filesystem条件。systemd不要、sudo不要|
-|`nfs`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|local homeの書込み権限。systemd user managerと`loginctl`があれば永続unit・lingerを利用。利用できなければdirect attach。WSL設定やlinger変更にsudoが必要な場合は明示確認|
+|`local`|`none`|通常home上の専用runtime、direnv、プロジェクトPixi、DevContainer/Docker生成||
+|`local`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|PixiEden runtimeから直接attach。|
+|`nfs`|`none`|machine-local home上の専用runtime、ファイル同期、direnv、プロジェクトPixi、DevContainer/Docker生成|事前に作成したlocal homeのowner・書込み権限・local filesystem条件。|
+|`nfs`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|local homeの書込み権限。PixiEden runtimeから直接attach。|
 
-`none`ではZellij、systemd、`loginctl`、lingerを検出・変更・起動しません。`zellij`でもsystemdが利用できない場合はdirect attachへfallbackします。別machineへZellijの画面や未同期の作業状態を移動する機能は提供しません。
+`none`では専用interactive Bashを起動し、Zellijは起動しません。`zellij`では`pixied shell`と生成されたhookがruntime内で`zellij attach --create pixied`を直接実行します。管理対象のZellij sessionが実行中の場合、終了するまでuninstallできません。別machineへZellijの画面や未同期の作業状態を移動する機能は提供しません。
 
 `nfs`modeで使う`PIXIED_LOCAL_HOME`は、install前に環境側で作成してください。指定pathは既存directoryであり、current userがownerで書込み可能、account homeと分離され、canonical pathとして検証できるlocal filesystem上にある必要があります。既定候補の`/local/$USER`もPixiEdenは自動作成しません。`install`はlocal homeを検証するだけで、local home作成用のサブコマンドも提供しません。
 
@@ -161,8 +159,7 @@ rmdir -- "$PIXIED_STATE_DIR/.lock"
 ## 動作要件
 
 - `bash`、`curl`または`wget`、`tar`を利用できるUbuntuまたは互換`Linux`。
-- WSL2でセッションマネージャを有効にした場合はsystemdが有効であること。無効な場合、PixiEdenは`/etc/wsl.conf`への変更案を表示し、明示確認とsudo許可があれば`[boot] systemd=true`をmergeします。同じrunではsessionを起動せず、手動で`wsl --shutdown`を実行してから`pixied install`を再実行してください。
-- セッションマネージャを有効にした場合、systemd user managerと`loginctl`が利用できればmachine-id付きuser unitとlingerを準備します。利用できない場合は診断を表示してdirect attachへfallbackします。セッションマネージャを無効にする場合はこれらを検出・変更・起動しません。
+- セッションマネージャが`zellij`の場合だけZellijが必要です。ZellijはPixiEden runtime内から直接起動されます。
 
 ## アンインストール
 
@@ -172,11 +169,9 @@ rmdir -- "$PIXIED_STATE_DIR/.lock"
 pixied uninstall
 ```
 
-セッションマネージャを有効にしていた場合、PixiEdenが作成したsystemdユーザーサービスと、PixiEdenが有効化したlinger設定を表示し、無効化前に確認します。`--yes`で確認を自動承認できます。
-
 uninstallは、current stateに記録された専用`PIXI_HOME`を管理境界にします。PixiEdenが新規作成した未共有の専用`PIXI_HOME`は、path、owner、stateを検証した後にdirectory単位で整理できます。既存pathまたは他machineと共有するpathでは、stateに記録されhashが一致する実行ファイルだけを整理し、共有Pixiのmetadata、manifest、`envs/`などは残る場合があります。PixiEdenはpackage単位の所有判定を行わず、現在のinstallが追加したGlobal packageだけを削除することも保証しません。
 
-対象のZellij sessionが残っている場合、systemd経由でもdirect attachでも削除を中止します。sessionを終了またはdetachしてから`pixied uninstall`を再実行してください。session一覧を取得できない場合も安全側に中止します。
+対象の管理対象Zellij sessionが残っている場合、uninstallを中止します。sessionを終了またはdetachしてから`pixied uninstall`を再実行してください。session一覧を取得できない場合も安全側に中止します。
 
 最後に、追加したshell設定ファイル（`~/.bashrc`または`~/.zshrc`など）からPixiEdenのhookブロックを手動で削除してください。途中で中断した場合も、ランチャーまたは配備済みCLIが残っていれば`pixied uninstall`を再実行できます。
 

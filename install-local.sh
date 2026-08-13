@@ -19,7 +19,6 @@ pixied_install_local() {
         lib/options.sh
         lib/pixi.sh
         lib/sync.sh
-        lib/systemd.sh
         lib/session.sh
         lib/hook.sh
         lib/generate.sh

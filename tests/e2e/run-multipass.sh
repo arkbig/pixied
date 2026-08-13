@@ -2,8 +2,8 @@
 # @brief Run PixiEden release-level checks in a disposable Multipass VM.
 # @description
 # Uses the Windows Multipass client explicitly when running from WSL. The
-# guest verifies the real Pixi, Zellij, systemd user unit, linger, PTY attach,
-# and reboot recovery paths without modifying the WSL host.
+# guest verifies the real Pixi, direct Zellij attach, and PTY behavior without
+# modifying the WSL host.
 
 set -Eeuo pipefail
 
@@ -152,7 +152,7 @@ cleanup() {
     exit "$exit_code"
 }
 
-# @description Build the release archive, run the install phase, reboot, and verify recovery.
+# @description Build the release archive and run the direct-attach guest check.
 # @exitcode 0 When all guest checks succeed.
 # @exitcode 1 When the VM or guest check fails.
 main() {
@@ -179,17 +179,9 @@ main() {
     run_multipass transfer "$guest_runner" \
         "$CURRENT_VM:/home/ubuntu/pixied-guest.sh"
 
-    printf '[E2E] installing real Pixi and persistent Zellij session\n'
+    printf '[E2E] installing real Pixi and attaching directly to Zellij\n'
     run_multipass exec "$CURRENT_VM" -- sudo env \
         PIXIED_E2E_PHASE=install bash /home/ubuntu/pixied-guest.sh
-
-    printf '[E2E] rebooting VM to verify linger-backed recovery\n'
-    run_multipass restart "$CURRENT_VM"
-    wait_for_vm "$CURRENT_VM"
-
-    printf '[E2E] verifying systemd unit and Zellij session after reboot\n'
-    run_multipass exec "$CURRENT_VM" -- sudo env \
-        PIXIED_E2E_PHASE=verify-after-reboot bash /home/ubuntu/pixied-guest.sh
 
     printf 'PASS: PixiEden Multipass E2E completed\n'
 }

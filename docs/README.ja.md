@@ -47,14 +47,14 @@ local homeの作成状態はNFS同期の有無とは別である。`nfs`modeで�
 
 |分類|環境変数|用途|
 |---|---|---|
-|install設定|`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`、`PIXIED_USE_SUDO`|CLI optionと同じinstall設定を環境変数から指定する。|
+|install設定|`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`|CLI optionと同じinstall設定を環境変数から指定する。|
 |advanced設定|`PIXIED_MACHINE_ID`|machine stateの識別子を明示する。安全なpath segmentでなければ停止する。|
 |Pixi version設定|`PIXIED_PIXI_VERSION`、`PIXIED_PIXI_SHA256`|Pixi versionの選択とasset checksumの明示を行う。|
 |release設定|`PIXIED_RELEASE_URL`|remote installerが取得するrelease archiveのURLを変更する。|
 
-READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`PIXIED_COMMAND_BIN`は、解決済みpathを説明するための名前であり、利用者が設定する入力overrideではない。`PIXIED_PIXI_HOME`と`PIXIED_SYSTEMD_USER_DIR`も実装上のpath overrideだが、初期版の利用者向け設定として公開しない。特に`PIXIED_PIXI_HOME`を既存Pixi環境へ向けると所有境界を変えるため、専用pathの解決を使う。
+READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`PIXIED_COMMAND_BIN`は、解決済みpathを説明するための名前であり、利用者が設定する入力overrideではない。`PIXIED_PIXI_HOME`も実装上のpath overrideだが、初期版の利用者向け設定として公開しない。特に`PIXIED_PIXI_HOME`を既存Pixi環境へ向けると所有境界を変えるため、専用pathの解決を使う。
 
-`PIXI_CACHE_DIR`と`PIXI_NO_PATH_UPDATE=1`はPixiEdenが専用runtimeを実行するために内部設定する変数であり、利用者が設定するものではない。`PIXIED_INSTALL_ASSUME_YES`、`PIXIED_SYSTEMD_USER_AVAILABLE`、`PIXIED_WSL`、`PIXIED_WSL_CONF_PATH`、`PIXIED_PIXI_BINARY_SOURCE`、`PIXIED_PIXI_ASSET_PATH`、`PIXIED_PIXI_LATEST_TAG`、fake command用の変数はtest/development injectionであり、利用者向けの互換性を保証しない。`PIXIED_PIXI_BINARY_SOURCE`で明示digestを省略した場合のhash照合は、source binaryの真正性ではなく一時ファイルへのcopy完全性だけを確認する。
+`PIXI_CACHE_DIR`と`PIXI_NO_PATH_UPDATE=1`はPixiEdenが専用runtimeを実行するために内部設定する変数であり、利用者が設定するものではない。`PIXIED_INSTALL_ASSUME_YES`、`PIXIED_PIXI_BINARY_SOURCE`、`PIXIED_PIXI_ASSET_PATH`、`PIXIED_PIXI_LATEST_TAG`、fake command用の変数はtest/development injectionであり、利用者向けの互換性を保証しない。`PIXIED_PIXI_BINARY_SOURCE`で明示digestを省略した場合のhash照合は、source binaryの真正性ではなく一時ファイルへのcopy完全性だけを確認する。
 
 ## 実装責務とデータ境界
 
@@ -69,7 +69,7 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`lib/pixi.sh`|専用Pixi binaryの取得・checksum検証、専用`PIXI_HOME`でのPixi実行、Global executableの検証。|
 |`lib/hook.sh`|Bash/zshからsourceできるruntime hookと、hookをsourceするshell codeの生成。|
 |`lib/sync.sh`|NFS modeの8ファイルallowlist、baseline、3-way判定、conflict artifact、clean exit後のpush。|
-|`lib/session.sh`、`lib/systemd.sh`|child command、Zellij、systemd user unit、linger、WSL設定変更、direct attach fallback。|
+|`lib/session.sh`|child command、Zellij session、runtime内のdirect attach。|
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
 |`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
 
@@ -77,13 +77,13 @@ installはaccount home、home mode、local home、XDG pathを副作用の前に�
 
 machine stateは`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存する。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。既存資源をstateなしまたはhash不一致のまま引き継がず、未管理の既存Pixi pathへのGlobal provisionも行わない。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。
 
-runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。hookの評価でnetwork、Pixi Global変更、systemd変更、NFS同期全体を実行しない。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、NFS modeのpullと、status `0`で終わった場合だけpushを行う。signal、失敗、conflict、lock/hash失敗時はpushしない。
+runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。hookの評価でnetwork、Pixi Global変更、NFS同期全体を実行しない。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、NFS modeのpullと、status `0`で終わった場合だけpushを行う。signal、失敗、conflict、lock/hash失敗時はpushしない。
 
 ## テストとrelease検証
 
-`tests/run.sh`のBats統合テストはfake Pixi、Zellij、systemd、loginctl、sudo、downloadを使い、hostの既存環境を変更せずに通常経路と失敗経路を検証する。4つのhome/session mode、再install、hook、shell/run、uninstall、生成物、checksum、所有境界はこのsuiteのcommand logと一時pathで確認する。
+`tests/run.sh`のBats統合テストはfake Pixi、Zellij、downloadを使い、hostの既存環境を変更せずに通常経路と失敗経路を検証する。4つのhome/session mode、再install、hook、shell/run、uninstall、生成物、checksum、所有境界はこのsuiteのcommand logと一時pathで確認する。
 
-実環境の責務は`tests/e2e/run-multipass.sh`へ集約する。runnerは`package-release.sh`が作成したarchiveを使って使い捨てUbuntu VMへinstallし、実Pixi、実direnv、実Zellij、systemd user unit、linger、PTY、reboot後の復旧を検証する。runnerが作成したVMだけを削除し、既存VMやhostのpathは変更しない。現在のrunnerが対象とするlocal homeとZellij経路に加え、NFSとWSLのsystemd設定変更は別E2E項目として結果と未実施理由を記録する。
+実環境の責務は`tests/e2e/run-multipass.sh`へ集約する。runnerは`package-release.sh`が作成したarchiveを使って使い捨てUbuntu VMへinstallし、実Pixi、実direnv、実Zellij、PTY、同一machine上のsession再接続を検証する。runnerが作成したVMだけを削除し、既存VMやhostのpathは変更しない。
 
 release archiveの入力は`install-local.sh`、`bin/`、`lib/`、両言語のREADME、`docs/`だけであり、`scripts/package-release.sh`がarchive root `pixied/`へまとめる。remote入口の`install.sh`はrelease archiveを取得してarchive内の`install-local.sh`へ委譲する。Pixi assetの固定checksum、公式Release checksum、`PIXIED_PIXI_SHA256` overrideのauthorityは`lib/pixi.sh`である。
 

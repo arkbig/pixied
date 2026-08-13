@@ -17,7 +17,7 @@ declare -gA PIXIED_OPTION_ENV_SET=()
 # @exitcode 0 Always.
 pixied_options_capture_environment() {
     local option variable
-    for option in home_mode local_home session_manager use_sudo machine_id pixi_home; do
+    for option in home_mode local_home session_manager machine_id pixi_home; do
         variable=PIXIED_${option^^}
         if [ -n "${!variable:-}" ]; then
             PIXIED_OPTION_ENV_SET["$option"]=1
@@ -31,7 +31,6 @@ pixied_options_capture_environment() {
 # @exitcode 0 When all environment values are valid.
 # @exitcode 2 When an environment value is invalid.
 pixied_options_validate_environment() {
-    local value
     if [ "${PIXIED_OPTION_ENV_SET[home_mode]:-0}" -eq 1 ] &&
         [ "${PIXIED_OPTION_CLI_SET[home_mode]:-0}" -eq 0 ]; then
         case "$PIXIED_HOME_MODE" in
@@ -59,34 +58,6 @@ pixied_options_validate_environment() {
         pixied_machine_id_is_safe "$PIXIED_MACHINE_ID" ||
             pixied_die "unsafe machine id: $PIXIED_MACHINE_ID" "$PIXIED_EXIT_USAGE"
     fi
-    if [ "${PIXIED_OPTION_ENV_SET[use_sudo]:-0}" -eq 1 ] &&
-        [ "${PIXIED_OPTION_CLI_SET[use_sudo]:-0}" -eq 0 ]; then
-        value=${PIXIED_USE_SUDO,,}
-        case "$value" in
-        1 | y | yes | true) export PIXIED_USE_SUDO=1 ;;
-        0 | n | no | false) export PIXIED_USE_SUDO=0 ;;
-        *) pixied_die "invalid use-sudo value: $PIXIED_USE_SUDO (expected yes or no)" "$PIXIED_EXIT_USAGE" ;;
-        esac
-    fi
-}
-
-# @description Validate and set a normalized boolean option value.
-# @arg $1 string The option name.
-# @arg $2 string The supplied value.
-# @exitcode 0 When the value is valid.
-# @exitcode 2 When the value is invalid.
-pixied_options_set_boolean() {
-    local option=$1 value=${2,,}
-    case "$value" in
-    1 | y | yes | true) value=1 ;;
-    0 | n | no | false) value=0 ;;
-    *) pixied_die "invalid $option value: $2 (expected yes or no)" "$PIXIED_EXIT_USAGE" ;;
-    esac
-    case "$option" in
-    use_sudo) export PIXIED_USE_SUDO=$value ;;
-    *) pixied_die "unknown boolean option: $option" "$PIXIED_EXIT_USAGE" ;;
-    esac
-    PIXIED_OPTION_CLI_SET["$option"]=1
 }
 
 # @description Parse and validate install options.
@@ -96,7 +67,6 @@ pixied_options_set_boolean() {
 # @set PIXIED_HOME_MODE string The requested home mode.
 # @set PIXIED_LOCAL_HOME string The requested local home.
 # @set PIXIED_SESSION_MANAGER string The requested session manager.
-# @set PIXIED_USE_SUDO integer Whether sudo may be used.
 # @set PIXIED_MACHINE_ID string The requested machine ID.
 # @set PIXIED_INSTALL_ASSUME_YES integer Whether prompts are skipped.
 # @exitcode 0 When parsing succeeds.
@@ -150,14 +120,6 @@ pixied_options_parse() {
         --session-manager=*)
             pixied_options_parse --session-manager "${option#*=}"
             ;;
-        --use-sudo)
-            [ "$#" -ge 2 ] || pixied_die "missing value for --use-sudo" "$PIXIED_EXIT_USAGE"
-            pixied_options_set_boolean use_sudo "$2"
-            shift
-            ;;
-        --use-sudo=*)
-            pixied_options_parse --use-sudo "${option#*=}"
-            ;;
         --machine-id)
             [ "$#" -ge 2 ] || pixied_die "missing value for --machine-id" "$PIXIED_EXIT_USAGE"
             pixied_machine_id_is_safe "$2" ||
@@ -207,7 +169,7 @@ pixied_options_prompt() {
 pixied_options_wizard() {
     local state_exists=${1:-0}
     local answer home_mode local_home local_home_default session_manager
-    local use_sudo machine_id previous_machine_id
+    local machine_id previous_machine_id
 
     [ "${PIXIED_INSTALL_ASSUME_YES:-0}" -eq 0 ] || return 0
     if ! [ -t 0 ] || ! [ -t 1 ]; then
@@ -268,27 +230,6 @@ pixied_options_wizard() {
         esac
     done
 
-    use_sudo=${PIXIED_USE_SUDO:-0}
-    while :; do
-        pixied_options_prompt "Allow sudo for optional system changes [yes/no] (current: $([ "$use_sudo" -eq 1 ] && printf yes || printf no)): "
-        answer=${PIXIED_OPTIONS_ANSWER:-$use_sudo}
-        case "${answer,,}" in
-        1 | y | yes | true)
-            use_sudo=1
-            export PIXIED_USE_SUDO=$use_sudo
-            PIXIED_OPTION_CLI_SET[use_sudo]=1
-            break
-            ;;
-        0 | n | no | false)
-            use_sudo=0
-            export PIXIED_USE_SUDO=$use_sudo
-            PIXIED_OPTION_CLI_SET[use_sudo]=1
-            break
-            ;;
-        *) pixied_warn "choose yes or no" ;;
-        esac
-    done
-
     machine_id=$PIXIED_MACHINE_ID
     while :; do
         pixied_options_prompt "Machine ID (current: $machine_id): "
@@ -326,7 +267,6 @@ pixied_options_confirm_install() {
   Account home: $PIXIED_ACCOUNT_HOME
   Local home: $PIXIED_LOCAL_HOME
   Session manager: $PIXIED_SESSION_MANAGER
-  Allow sudo: $([ "$PIXIED_USE_SUDO" -eq 1 ] && printf yes || printf no)
   Machine ID: $PIXIED_MACHINE_ID
   Pixi version: $pixi_version
   Pixi home: $PIXIED_PIXI_HOME
@@ -380,9 +320,6 @@ pixied_options_apply_state() {
     if ! pixied_options_is_explicit session_manager; then
         export PIXIED_SESSION_MANAGER=${PIXIED_STATE[session_manager]}
     fi
-    if ! pixied_options_is_explicit use_sudo && [ -n "${PIXIED_STATE[use_sudo]:-}" ]; then
-        export PIXIED_USE_SUDO=${PIXIED_STATE[use_sudo]}
-    fi
     if ! pixied_options_is_explicit machine_id; then
         export PIXIED_MACHINE_ID=${PIXIED_STATE[machine_id]}
     fi
@@ -392,7 +329,6 @@ pixied_options_apply_state() {
     export PIXIED_DATA_DIR=${PIXIED_STATE[data_dir]}
     export PIXIED_CONFIG_DIR=${PIXIED_STATE[config_dir]}
     export PIXIED_STATE_DIR=${PIXIED_STATE[state_dir]}
-    export PIXIED_SYSTEMD_USER_DIR=${PIXIED_STATE[systemd_user_dir]}
     export PIXIED_COMMAND_BIN=${PIXIED_STATE[command_bin]}
 }
 
@@ -401,8 +337,5 @@ pixied_options_apply_state() {
 pixied_options_apply_defaults() {
     if ! pixied_options_is_explicit session_manager; then
         export PIXIED_SESSION_MANAGER=${PIXIED_SESSION_MANAGER:-zellij}
-    fi
-    if ! pixied_options_is_explicit use_sudo; then
-        export PIXIED_USE_SUDO=${PIXIED_USE_SUDO:-0}
     fi
 }

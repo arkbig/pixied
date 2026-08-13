@@ -63,14 +63,14 @@ machine間で共有または再現されるのは、PixiEdenの設定、固定�
 
 ## 動作モードと権限
 
-|home mode|session manager|専用runtime|プロジェクトPixi|Zellij永続化|systemd / sudo要件|
+|home mode|session manager|専用runtime|プロジェクトPixi|Zellij永続化|必要な条件・権限|
 |---|---|---|---|---|---|
-|`local`|`none`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|なし|systemd不要。sudo不要。|
-|`local`|`zellij`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|同じmachineのsessionへ再接続|systemd user managerと`loginctl`が利用できればunit・lingerを利用。lingerやWSL設定変更にsudoが必要な場合は明示確認。利用できなければdirect attach。|
-|`nfs`|`none`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|なし|systemd不要。local homeの作成・書込み権限が必要。sudo不要。|
-|`nfs`|`zellij`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|同じmachineのsessionへ再接続|local homeの書込み権限に加え、systemd user managerと`loginctl`が利用できればunit・lingerを利用。lingerやWSL設定変更にsudoが必要な場合は明示確認。利用できなければdirect attach。|
+|`local`|`none`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|なし|昇格権限不要。|
+|`local`|`zellij`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|同じmachineのsessionへ再接続|runtime内から専用sessionへ直接attach。昇格権限不要。|
+|`nfs`|`none`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|なし|local homeの作成・書込み権限が必要。昇格権限不要。|
+|`nfs`|`zellij`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|同じmachineのsessionへ再接続|local homeの書込み権限が必要。runtime内から専用sessionへ直接attach。昇格権限不要。|
 
-`zellij`を選んでもsystemdまたはsudoが必須になるわけではない。systemd user managerを使えない場合はdirect attachへfallbackし、sudoを拒否した場合はWSL設定やlingerを変更せず、利用可能な範囲で停止またはfallbackする。`none`ではZellij、systemd、`loginctl`、lingerを検出・変更・起動しない。
+`zellij`ではPixiEden runtime内から`zellij attach --create pixied`を直接実行する。親shellの環境を継承するため、`SSH_AUTH_SOCK`なども利用できる。`none`では専用interactive Bashを起動し、Zellijを起動しない。
 
 ## トレーサビリティ
 
