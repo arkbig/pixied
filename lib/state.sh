@@ -443,7 +443,9 @@ pixied_state_lock_acquire() {
     parent=${lock_dir%/*}
     [ -d "$parent" ] || pixied_die "state lock parent does not exist: $parent"
     pixied_validate_owned_path "$parent"
-    [ ! -e "$lock_dir" ] || pixied_die "state lock already exists: $lock_dir"
+    if [ -e "$lock_dir" ]; then
+        pixied_die "state lock already exists: $lock_dir; PixiEden may already be active or the lock may be stale; stop the active runtime or remove the stale lock directory manually"
+    fi
     if ! pixied_run mkdir -- "$lock_dir"; then
         pixied_die "could not acquire state lock: $lock_dir"
     fi

@@ -1089,7 +1089,9 @@ CONF
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
 
-    run env -u CI -u ZELLIJ -u PIXI_HOME HOME="$home" \
+    run env -u CI -u ZELLIJ -u PIXI_HOME -u PIXIED_RUNTIME_HOOK_ACTIVE -u PIXIED_STATE_DIR \
+        -u PIXIED_RUNTIME_STATE_FILE -u PIXIED_STATE_FILE -u PIXIED_DATA_DIR \
+        -u PIXIED_CONFIG_DIR -u PIXIED_PIXI_HOME HOME="$home" \
         XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
         PIXIED_COMMAND_LOG="$log" TERM=xterm-256color \
@@ -2398,4 +2400,38 @@ CASES
     run bash -c '. "$1/lib/common.sh"; pixied_enable_strict_mode; kill -TERM "$$"' \
         bash "$PIXIED_REPO_ROOT"
     assert_failure 143
+}
+
+# Re-entering from a generated hook must explain that the runtime is already active.
+@test "shell reports when PixiEden is already active" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+
+    run env PIXIED_RUNTIME_HOOK_ACTIVE=1 bash "$cli" shell
+    assert_failure
+    assert_output --partial 'PixiEden is already active in this shell; use exit to leave it'
+}
+
+# An existing lock must not be removed automatically, but should explain both
+# an active runtime and a stale lock as possible causes.
+@test "existing runtime lock explains active or stale state" {
+    local home="$PIXIED_TEST_ROOT/phase-lock-message-home"
+    local data="$PIXIED_TEST_ROOT/phase-lock-message-data"
+    local config="$PIXIED_TEST_ROOT/phase-lock-message-config"
+    local state="$PIXIED_TEST_ROOT/phase-lock-message-state"
+    local lock="$state/pixied/.lock"
+
+    mkdir -p "$home" "$lock"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_STATE_DIR="$state/pixied" \
+        bash -c '\
+        . "$1/lib/common.sh"; \
+        . "$1/lib/paths.sh"; \
+        . "$1/lib/state.sh"; \
+        pixied_resolve_paths; \
+        pixied_state_lock_acquire "$2"' \
+        bash "$PIXIED_REPO_ROOT" "$lock"
+    assert_failure
+    assert_output --partial 'state lock already exists'
+    assert_output --partial 'PixiEden may already be active or the lock may be stale'
+    [ -d "$lock" ] || pixied_test_fail "existing lock was removed"
 }

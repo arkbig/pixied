@@ -342,6 +342,11 @@ pixied_runtime_run() {
 # signal number when the process was terminated by a signal.
 pixied_runtime_shell() {
     local session_name child_status push_allowed=1 session_status
+    if [ "${PIXIED_RUNTIME_HOOK_ACTIVE:-0}" -eq 1 ] &&
+        [ "${PIXIED_RUNTIME_HOOK_AUTOSTART:-0}" -ne 1 ]; then
+        pixied_die "PixiEden is already active in this shell; use exit to leave it" \
+            "$PIXIED_EXIT_FAILURE"
+    fi
     pixied_runtime_prepare
 
     pixied_require_tty

@@ -119,6 +119,7 @@ RUNTIME_HEAD
     fi
 
     export PIXIED_RUNTIME_HOOK_ACTIVE=1
+    export PIXIED_RUNTIME_HOOK_AUTOSTART=1
     export PIXIED_RUNTIME_STATE_FILE="$state_file"
     export PIXIED_STATE_FILE="$state_file"
     export PIXIED_MACHINE_ID="$machine_id"
@@ -188,7 +189,7 @@ PATH_RESULT
     *i*)
         if [ -t 0 ] && [ -t 1 ] && [ -z "${CI:-}" ] &&
             [ "$session_manager" = zellij ] && [ -z "${ZELLIJ:-}" ]; then
-            if ! "$pixied_cli_path" shell; then
+            if ! PIXIED_RUNTIME_HOOK_AUTOSTART=1 "$pixied_cli_path" shell; then
                 printf '%s\n' '[pixied] WARN automatic runtime start failed.' >&2
             fi
         fi
