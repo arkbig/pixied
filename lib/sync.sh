@@ -40,20 +40,48 @@ pixied_sync_allowlisted() {
     return 1
 }
 
+# @description Resolve one allowlisted file to its safe regular-file target.
+# Existing symlinks are accepted only when they resolve inside the account home;
+# this preserves common dotfile links without allowing synchronization to escape
+# the managed home boundary.
+#
+# @arg $1 string The absolute file path.
+# @stdout The canonical regular-file path.
+# @exitcode 0 When the path is absent or resolves to a safe regular file.
+# @exitcode 1 When the path is unsafe or non-regular.
+pixied_sync_resolve_file_path() {
+    local path=$1 root=$2 resolved
+    if [ -L "$path" ]; then
+        [ -e "$path" ] || pixied_die "sync target is not a regular file: $path"
+        resolved=$(pixied_run realpath -e -- "$path") ||
+            pixied_die "sync target is not a regular file: $path"
+        case "$resolved/" in
+        "$root/"*) ;;
+        *) pixied_die "sync target symlink escapes account home: $path" ;;
+        esac
+    else
+        resolved=$(pixied_validate_canonical_path "$path")
+    fi
+    if [ -e "$resolved" ] || [ -L "$resolved" ]; then
+        if ! [ -f "$resolved" ] || [ -L "$resolved" ]; then
+            pixied_die "sync target is not a regular file: $path"
+        fi
+    fi
+    printf '%s' "$resolved"
+}
+
 # @description Return the hash or missing marker for one allowlisted file.
-# Symlinks, directories, and other non-regular entries are rejected.
+# Symlinks resolving inside the account home are hashed at their target.
 #
 # @arg $1 string The absolute file path.
 # @stdout A SHA-256 digest or the literal 'missing'.
 # @exitcode 0 When the file state is read.
 # @exitcode 1 When the path is not a regular file or cannot be hashed.
 pixied_sync_file_state() {
-    local path=$1
-    if [ -e "$path" ] || [ -L "$path" ]; then
-        if ! [ -f "$path" ] || [ -L "$path" ]; then
-            pixied_die "sync target is not a regular file: $path"
-        fi
-        pixied_sha256_file "$path"
+    local path=$1 resolved
+    resolved=$(pixied_sync_resolve_file_path "$path" "$PIXIED_ACCOUNT_HOME")
+    if [ -e "$resolved" ]; then
+        pixied_sha256_file "$resolved"
     else
         printf 'missing'
     fi
@@ -77,6 +105,19 @@ pixied_sync_account_path() {
 pixied_sync_local_path() {
     pixied_sync_allowlisted "$1" || pixied_die "sync file is outside the allowlist: $1"
     printf '%s/%s' "$PIXIED_LOCAL_HOME" "$1"
+}
+
+# @description Return whether a path is an account-side allowlisted file.
+# @arg $1 string The absolute path to check.
+# @exitcode 0 When the path exactly names an allowlisted account file.
+# @exitcode 1 When the path is outside the account allowlist.
+pixied_sync_account_path_allowlisted() {
+    local item path=$1 account_home=${PIXIED_ACCOUNT_HOME:-}
+    [ -n "$account_home" ] || return 1
+    for item in "${PIXIED_SYNC_ALLOWLIST[@]}"; do
+        [ "$path" = "$account_home/$item" ] && return 0
+    done
+    return 1
 }
 
 # @description Validate the parent directory of the baseline manifest.
@@ -147,12 +188,19 @@ pixied_sync_baseline_load() {
 # @exitcode 1 When the copy cannot be completed safely.
 pixied_sync_copy_atomic() {
     local source=$1 destination=$2 directory temporary source_hash destination_hash
-    if ! [ -f "$source" ] || [ -L "$source" ]; then
+    if [ -L "$source" ] && pixied_sync_account_path_allowlisted "$source"; then
+        source=$(pixied_sync_resolve_file_path "$source" "$PIXIED_ACCOUNT_HOME")
+    elif [ -L "$source" ] || ! [ -f "$source" ]; then
         pixied_die "sync source is not a regular file: $source"
+    else
+        source=$(pixied_validate_canonical_path "$source")
     fi
-    source=$(pixied_validate_canonical_path "$source")
     pixied_validate_owned_path "$source"
-    pixied_validate_canonical_path "$destination" >/dev/null
+    if [ -L "$destination" ]; then
+        destination=$(pixied_sync_resolve_file_path "$destination" "$PIXIED_ACCOUNT_HOME")
+    else
+        destination=$(pixied_validate_canonical_path "$destination")
+    fi
     directory=${destination%/*}
     [ -d "$directory" ] || pixied_die "sync destination parent is missing: $directory"
     pixied_validate_owned_path "$directory"
