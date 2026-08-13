@@ -163,7 +163,7 @@ pixied_runtime_validate_state() {
 # @exitcode 0 When the state and all runtime artifacts are valid.
 # @exitcode 1 When PixiEden is not installed or validation fails.
 pixied_runtime_load_state() {
-    local state_file state_dir
+    local state_file state_dir state_home
     if [ -n "${PIXIED_RUNTIME_STATE_FILE:-}" ]; then
         state_file=$(pixied_validate_canonical_path "$PIXIED_RUNTIME_STATE_FILE")
         pixied_runtime_set_identity
@@ -180,8 +180,20 @@ pixied_runtime_load_state() {
         fi
         export PIXIED_STATE_DIR=$state_dir
     else
-        pixied_resolve_paths
-        state_file=$PIXIED_STATE_FILE
+        # Direct runtime commands must locate state before resolving the NFS
+        # local home. The local home is stored in state, so resolving all paths
+        # first would incorrectly fall back to /local/$USER.
+        pixied_runtime_set_identity
+        if [ -n "${PIXIED_STATE_DIR:-}" ]; then
+            state_dir=$(pixied_validate_canonical_path "$PIXIED_STATE_DIR")
+        else
+            state_home=${XDG_STATE_HOME:-$PIXIED_ACCOUNT_HOME/.local/state}
+            state_home=$(pixied_resolve_xdg_path "$state_home")
+            state_dir=$(pixied_validate_canonical_path "$state_home/pixied")
+        fi
+        export PIXIED_STATE_DIR=$state_dir
+        state_file="$state_dir/machines/$PIXIED_MACHINE_ID/state"
+        state_file=$(pixied_validate_canonical_path "$state_file")
     fi
 
     [ -f "$state_file" ] ||
