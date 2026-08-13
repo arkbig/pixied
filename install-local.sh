@@ -76,6 +76,11 @@ pixied_install_local() {
         pixied_run chmod 0644 "$destination/$file"
     done
     pixied_success "PixiEden CLI deployed to $destination/bin/pixied"
+    # PIXIED_PIXI_HOME may have been derived only to locate the deployment
+    # directory. Do not make that bootstrap value override the wizard's local home.
+    if ! pixied_options_is_explicit pixi_home; then
+        unset PIXIED_PIXI_HOME
+    fi
     "$destination/bin/pixied" install "$@"
 }
 

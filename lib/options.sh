@@ -153,6 +153,7 @@ pixied_options_parse() {
 # @exitcode 1 When standard input reaches EOF.
 pixied_options_prompt() {
     local prompt=$1
+    PIXIED_OPTIONS_ANSWER=""
     printf '%s' "$prompt" >&2
     if ! IFS= read -r PIXIED_OPTIONS_ANSWER; then
         pixied_die "installation wizard reached end of input"
