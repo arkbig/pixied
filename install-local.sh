@@ -24,7 +24,7 @@ pixied_install_local() {
         lib/generate.sh
         lib/uninstall.sh
     )
-    pixied_resolve_paths
+    pixied_resolve_paths 1
     destination=$PIXIED_DATA_DIR
     if [ -e "$destination" ] || [ -L "$destination" ]; then
         created_data=0

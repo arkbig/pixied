@@ -460,11 +460,15 @@ PYPROJECT
     local config="$PIXIED_TEST_ROOT/wizard-config"
     local state="$PIXIED_TEST_ROOT/wizard-state"
     local log="$PIXIED_TEST_ROOT/wizard.log"
+    local fake_bin="$PIXIED_TEST_ROOT/wizard-fake-bin"
     local machine_id=wizard-machine
-    mkdir -p "$home"
+    mkdir -p "$home" "$fake_bin"
+    printf '#!/usr/bin/env bash\ncase "$*" in\n*%s*) exit 1 ;;\n*) exec /usr/bin/df "$@" ;;\nesac\n' \
+        "$home" >"$fake_bin/df"
+    chmod 0755 "$fake_bin/df"
     : >"$log"
 
-    run env -i PATH="$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+    run env -i PATH="$fake_bin:$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_COMMAND_LOG="$log" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
@@ -478,6 +482,7 @@ PYPROJECT
     assert_output --partial 'Home mode: local'
     assert_output --partial 'Session manager: none'
     assert_output --partial 'Proceed with installation? [Y/n]'
+    assert_output --partial 'NFS synchronization is disabled'
     [ -f "$state/pixied/machines/$machine_id/state" ] ||
         pixied_test_fail "wizard installation state is missing"
     if command grep -Eq -- '^(pixi|curl|wget) ' "$log"; then
@@ -1683,6 +1688,34 @@ CASES
         pixied_test_fail "local PIXI_HOME was not derived from local data path"
 }
 
+@test "explicit local mode continues on an NFS account home with a warning" {
+    local home="$PIXIED_TEST_ROOT/explicit-local-nfs-home"
+    local data="$PIXIED_TEST_ROOT/explicit-local-nfs-data"
+    local config="$PIXIED_TEST_ROOT/explicit-local-nfs-config"
+    local state="$PIXIED_TEST_ROOT/explicit-local-nfs-state"
+    local bin="$PIXIED_TEST_ROOT/explicit-local-nfs-bin"
+    local fake_bin="$PIXIED_TEST_ROOT/explicit-local-nfs-fake-bin"
+    mkdir -p "$home" "$data" "$config" "$state" "$bin" "$fake_bin"
+    printf '#!/usr/bin/env bash\ncase "$*" in\n*%s*) exit 1 ;;\n*) exec /usr/bin/df "$@" ;;\nesac\n' \
+        "$home" >"$fake_bin/df"
+    chmod 0755 "$fake_bin/df"
+
+    run env PATH="$fake_bin:/usr/bin:/bin" HOME="$home" \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        XDG_BIN_HOME="$bin" PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=explicit-local-nfs \
+        bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        pixied_resolve_paths
+        printf "%s\n" "$PIXIED_HOME_MODE" "$PIXIED_LOCAL_HOME"
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output --partial "account home is not on a local filesystem"
+    assert_output --partial "NFS synchronization is disabled"
+    [[ "$output" == *$'local\n'$home* ]] ||
+        pixied_test_fail "explicit local mode did not continue with the account home"
+}
+
 # US-106-1
 @test "NFS paths use a separate local home" {
     local home="$PIXIED_TEST_ROOT/nfs-account"
@@ -2005,6 +2038,29 @@ CASES
     [ ! -e "$marker" ] || pixied_test_fail "local child ran while the runtime lock existed"
     [ -d "$state/pixied/.lock" ] || pixied_test_fail "existing runtime lock was removed"
     rmdir "$state/pixied/.lock"
+}
+
+@test "missing NFS local home explains how to prepare it" {
+    local home="$PIXIED_TEST_ROOT/missing-local-home-account"
+    local local_home="$PIXIED_TEST_ROOT/missing-local-home"
+    local data="$PIXIED_TEST_ROOT/missing-local-home-data"
+    local config="$PIXIED_TEST_ROOT/missing-local-home-config"
+    local state="$PIXIED_TEST_ROOT/missing-local-home-state"
+    local bin="$PIXIED_TEST_ROOT/missing-local-home-bin"
+    mkdir -p "$home" "$data" "$config" "$state" "$bin"
+
+    run env HOME="$home" PIXIED_LOCAL_HOME="$local_home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" XDG_BIN_HOME="$bin" \
+        PIXIED_HOME_MODE=nfs PIXIED_MACHINE_ID=missing-local-home bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        pixied_resolve_paths
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_failure 1
+    assert_output --partial "local home is not a directory: $local_home"
+    assert_output --partial "create it before installation"
+    assert_output --partial "mkdir -p $local_home"
+    assert_output --partial "--local-home PATH"
 }
 
 @test "filesystem detection failures are reported" {

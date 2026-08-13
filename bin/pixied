@@ -174,7 +174,7 @@ pixied_install() {
     fi
 
     pixied_options_apply_defaults
-    pixied_resolve_paths
+    pixied_resolve_paths 0
     pixied_require_cmd bash
     pixied_run bash --version >/dev/null
 

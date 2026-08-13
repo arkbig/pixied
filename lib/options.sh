@@ -188,6 +188,9 @@ pixied_options_wizard() {
             home_mode=$answer
             export PIXIED_HOME_MODE=$home_mode
             PIXIED_OPTION_CLI_SET[home_mode]=1
+            if ! pixied_options_is_explicit pixi_home; then
+                unset PIXIED_PIXI_HOME
+            fi
             break
             ;;
         *) pixied_warn "choose local or nfs" ;;

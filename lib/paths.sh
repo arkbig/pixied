@@ -210,9 +210,10 @@ pixied_machine_id() {
 }
 
 # @description Resolve all the paths pixied uses and export them as environment variables.
-# Performs home mode detection, local home validation on NFS, XDG directory
-# resolution, machine ID determination, and pixi home determination in order.
+# Performs home mode detection, optional local home validation on NFS, XDG
+# directory resolution, machine ID determination, and pixi home determination.
 #
+# @arg $1 integer Whether to validate the selected local home (default: yes).
 # @set PIXIED_ACCOUNT_HOME string The account home directory
 # @set PIXIED_HOME_MODE string The home mode (local or nfs)
 # @set PIXIED_LOCAL_HOME string The local home directory
@@ -229,9 +230,11 @@ pixied_machine_id() {
 # @see pixied_detect_home_mode
 # @see pixied_machine_id
 pixied_resolve_paths() {
-    local account_home home_mode local_home data_home config_home state_home bin_home
+    local validate_home=${1:-1}
+    local account_home requested_home_mode home_mode local_home data_home config_home state_home bin_home
     local data_dir config_dir state_dir command_bin
 
+    requested_home_mode=${PIXIED_HOME_MODE:-}
     account_home=$(pixied_validate_home_directory "${HOME:-}" "account home")
     export PIXIED_ACCOUNT_HOME=$account_home
 
@@ -246,13 +249,22 @@ pixied_resolve_paths() {
 
     if [ "$home_mode" = nfs ]; then
         local_home=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
-        local_home=$(pixied_validate_home_directory "$local_home" "local home")
-        [ "$local_home" != "$account_home" ] ||
-            pixied_path_fail "NFS local home must differ from account home"
-        pixied_is_local_filesystem "$local_home" ||
-            pixied_path_fail "local home is not on a local filesystem: $local_home"
+        if [ "$validate_home" -eq 1 ]; then
+            if [ ! -d "$local_home" ]; then
+                pixied_path_fail "local home is not a directory: $local_home; create it before installation and make it writable and owned by the current user (for example: mkdir -p $local_home), or specify an existing directory with --local-home PATH"
+            fi
+            local_home=$(pixied_validate_home_directory "$local_home" "local home")
+            [ "$local_home" != "$account_home" ] ||
+                pixied_path_fail "NFS local home must differ from account home"
+            pixied_is_local_filesystem "$local_home" ||
+                pixied_path_fail "local home is not on a local filesystem: $local_home"
+        fi
     else
         local_home=$account_home
+        if [ "$validate_home" -eq 1 ] && [ "$requested_home_mode" = local ] &&
+            ! pixied_is_local_filesystem "$account_home"; then
+            pixied_warn "account home is not on a local filesystem; continuing with explicitly requested local home mode (NFS synchronization is disabled)"
+        fi
     fi
 
     data_home=${XDG_DATA_HOME:-$account_home/.local/share}
