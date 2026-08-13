@@ -11,6 +11,27 @@ readonly PIXIED_SOURCE_DIR
 . "$PIXIED_SOURCE_DIR/lib/options.sh"
 pixied_enable_strict_mode
 
+# @description Print the local installer usage and available installation options.
+# @stdout The installer help message.
+# @exitcode 0 Always.
+pixied_install_help() {
+    cat <<'USAGE'
+Usage: install-local.sh [OPTIONS]
+
+Deploy PixiEden from the local source tree and run its installer.
+
+Options:
+    --help                         Show this help.
+    --yes                          Skip interactive confirmation prompts.
+    --home-mode local|nfs          Select the account home mode.
+    --local-home PATH              Set the machine-local home used by NFS mode.
+    --session-manager none|zellij  Select the runtime session manager.
+    --machine-id ID                Set the machine-specific state identifier.
+
+The same installation options can be passed to `pixied install`.
+USAGE
+}
+
 pixied_install_local() {
     local destination file created_data
     local deploy_bin="bin/pixied"
@@ -57,5 +78,10 @@ pixied_install_local() {
     pixied_success "PixiEden CLI deployed to $destination/bin/pixied"
     "$destination/bin/pixied" install "$@"
 }
+
+if [ "$#" -eq 1 ] && [ "$1" = '--help' ]; then
+    pixied_install_help
+    exit 0
+fi
 
 pixied_install_local "$@"

@@ -6,6 +6,27 @@ set -Eeuo pipefail
 readonly PIXIED_RELEASE_URL="${PIXIED_RELEASE_URL:-https://github.com/arkbig/pixied/releases/latest/download/pixied.tar.gz}"
 PIXIED_INSTALL_TEMPORARY_DIR=""
 
+# @description Print the release installer usage and available installation options.
+# @stdout The installer help message.
+# @exitcode 0 Always.
+print_help() {
+    cat <<'USAGE'
+Usage: install.sh [OPTIONS]
+
+Download the latest PixiEden release and install it locally.
+
+Options:
+    --help                         Show this help.
+    --yes                          Skip interactive confirmation prompts.
+    --home-mode local|nfs          Select the account home mode.
+    --local-home PATH              Set the machine-local home used by NFS mode.
+    --session-manager none|zellij  Select the runtime session manager.
+    --machine-id ID                Set the machine-specific state identifier.
+
+The same installation options can be passed to `pixied install`.
+USAGE
+}
+
 # @description Print an installer error and terminate.
 # @arg $@ string The error message.
 # @stderr The error message.
@@ -80,6 +101,11 @@ cleanup() {
 # @arg $@ string Installation options forwarded to install-local.sh.
 # @exitcode The release installer status.
 main() {
+    if [ "$#" -eq 1 ] && [ "$1" = '--help' ]; then
+        print_help
+        return 0
+    fi
+
     local archive checksum_file extraction_dir installer
     command -v mktemp >/dev/null 2>&1 || fail 'mktemp is required'
     command -v tar >/dev/null 2>&1 || fail 'tar is required'
