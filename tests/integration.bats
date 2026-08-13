@@ -730,6 +730,8 @@ CURL
         pixied_test_fail "unit does not start the dedicated Zellij session"
     grep -Fq -- 'ExecStop=-'"$data/pixied/pixi/bin/zellij"' delete-session pixied' "$unit" ||
         pixied_test_fail "unit does not delete the dedicated Zellij session"
+    grep -Fq -- 'Environment=PATH='"$home/.local/bin:$data/pixied/bin:$data/pixied/pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$unit" ||
+        pixied_test_fail "unit does not provide a complete non-interactive PATH"
     grep -Fq -- 'unit_path='"$unit" "$state_file" || pixied_test_fail "unit path was not persisted"
     grep -Eq -- '^unit_hash=[0-9a-f]{64}$' "$state_file" ||
         pixied_test_fail "unit hash was not persisted"

@@ -193,11 +193,15 @@ pixied_systemd_escape_value() {
 # @exitcode 0 Always.
 pixied_systemd_unit_content() {
     local unit_home unit_pixi unit_cache unit_path unit_bin unit_state unit_path_env
+    local system_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     unit_home=$(pixied_systemd_escape_value "$PIXIED_LOCAL_HOME")
     unit_pixi=$(pixied_systemd_escape_value "$PIXIED_PIXI_HOME")
     unit_cache=$(pixied_systemd_escape_value "$PIXIED_PIXI_HOME/cache")
+    # systemd does not inherit the interactive shell's PATH. Keep the runtime
+    # paths first, then add the standard system directories required by zsh,
+    # nvm, direnv, and ordinary shell startup files.
     unit_path=$(pixied_systemd_escape_value \
-        "$PIXIED_COMMAND_BIN:$PIXIED_DATA_DIR/bin:$PIXIED_PIXI_HOME/bin")
+        "$PIXIED_COMMAND_BIN:$PIXIED_DATA_DIR/bin:$PIXIED_PIXI_HOME/bin:$system_path")
     unit_bin=$(pixied_systemd_escape_value "$PIXIED_ZELLIJ_PATH")
     unit_state=$(pixied_systemd_escape_value "$PIXIED_STATE_FILE")
     unit_path_env=$(pixied_systemd_escape_value "$PIXIED_SYSTEMD_UNIT_PATH")
