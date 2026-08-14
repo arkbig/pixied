@@ -53,10 +53,10 @@ Usage: pixied [COMMAND]
 
 Commands:
     (no command)           Alias for shell.
-    shell                  Attach to the PixiEden session.
+    shell [options]        Attach to the PixiEden session.
     run <command>          Run a command in the PixiEden runtime.
     install                Install the dedicated Pixi environment and verify state.
-    hook <bash|zsh>        Print shell initialization code.
+    hook <shell> [options] Print shell initialization code.
     generate direnv        Generate a project .envrc
     generate devcontainer  Generate a DevContainer definition
     generate dockerfile    Generate a Dockerfile
@@ -68,15 +68,46 @@ Runtime activation uses the dedicated Pixi environment and starts an isolated ch
 USAGE
 }
 
+# @description Print the shell subcommand usage to standard output.
+# @stdout The shell command help message
+pixied_shell_usage() {
+    cat <<'USAGE'
+Usage: pixied shell [--auto-attach auto|none]
+
+Attach to the PixiEden session.
+
+Runtime activation uses the dedicated Pixi environment and starts an isolated
+child process.
+
+Options:
+    --auto-attach auto|none   (or PIXIED_AUTO_ATTACH=auto|none) controls whether the
+                              interactive shell auto-attaches to Zellij. Use 'none' to
+                              skip auto-attach and join manually with:
+                              zellij attach --create pixied (default: auto)
+USAGE
+}
+
 # @description Attach to the PixiEden session.
 # Loads and validates the current machine state before starting an interactive
-# child shell or attaching to the direct Zellij session.
+# child shell or attaching to the direct Zellij session. The --auto-attach flag
+# or PIXIED_AUTO_ATTACH environment variable overrides the Zellij auto-attach.
+# When --help is passed, prints the shell subcommand usage instead.
 #
-# @exitcode 0 When the child shell or attach process exits successfully.
+# @arg $@ string Runtime options.
+# @exitcode 0 When the child shell or attach process exits successfully, or
+# when the shell usage is printed.
 # @exitcode The child or attach process exit status, including 128 plus the
 # signal number when the process was terminated by a signal.
+# @see pixied_shell_usage
 pixied_shell() {
-    [ "$#" -eq 0 ] || pixied_die "usage: pixied shell" "$PIXIED_EXIT_USAGE"
+    pixied_options_parse_runtime "$@"
+    if [ "${PIXIED_OPTIONS_HELP:-0}" -eq 1 ]; then
+        pixied_shell_usage
+        return "$PIXIED_EXIT_OK"
+    fi
+    if [ "${#PIXIED_RUNTIME_POSITIONAL[@]}" -gt 0 ]; then
+        pixied_die "usage: pixied shell [--auto-attach auto|none]" "$PIXIED_EXIT_USAGE"
+    fi
     pixied_runtime_shell
 }
 
@@ -92,22 +123,54 @@ pixied_run_command() {
     pixied_runtime_run "$@"
 }
 
+# @description Print the hook subcommand usage to standard output.
+# @stdout The hook command help message
+pixied_hook_usage() {
+    cat <<'USAGE'
+Usage: pixied hook <bash|zsh> [--auto-attach auto|none]
+
+Print shell initialization code for the PixiEden runtime.
+
+Arguments:
+    <shell>   The target shell: bash or zsh.
+
+Options:
+    --auto-attach auto|none   (or PIXIED_AUTO_ATTACH=auto|none) controls whether the
+                              interactive hook auto-attaches to Zellij. When passed, the
+                              resolved setting is baked into the generated runtime hook.
+                              (default: auto)
+USAGE
+}
+
 # @description Handle the hook that prints shell initialization code.
 # Bash and zsh are supported. The runtime state and generated hook are
-# validated before source code is emitted.
+# validated before source code is emitted. When --auto-attach is passed, the
+# runtime hook is regenerated so the resolved mode is baked into the sourced
+# file and persisted with the updated hook hash. When --help is passed, prints
+# the hook subcommand usage instead.
 #
-# @arg $@ string The shell name to hook
+# @arg $@ string The shell name and runtime options
 # @exitcode 2 When the usage is invalid
 # @exitcode 1 When the installation or generated hook is invalid
+# @see pixied_hook_usage
 pixied_hook() {
-    if [ "$#" -ne 1 ]; then
-        pixied_die "usage: pixied hook <bash|zsh>" "$PIXIED_EXIT_USAGE"
+    pixied_options_parse_runtime "$@"
+    if [ "${PIXIED_OPTIONS_HELP:-0}" -eq 1 ]; then
+        pixied_hook_usage
+        return "$PIXIED_EXIT_OK"
     fi
-    case "$1" in
+    if [ "${#PIXIED_RUNTIME_POSITIONAL[@]}" -ne 1 ]; then
+        pixied_die "usage: pixied hook <bash|zsh> [--auto-attach auto|none]" "$PIXIED_EXIT_USAGE"
+    fi
+    case "${PIXIED_RUNTIME_POSITIONAL[0]}" in
     bash | zsh) ;;
-    *) pixied_die "usage: pixied hook <bash|zsh>" "$PIXIED_EXIT_USAGE" ;;
+    *) pixied_die "usage: pixied hook <bash|zsh> [--auto-attach auto|none]" "$PIXIED_EXIT_USAGE" ;;
     esac
     pixied_runtime_load_state
+    if [ "${PIXIED_OPTION_CLI_SET[auto_attach]:-0}" -eq 1 ]; then
+        pixied_hook_generate_runtime
+        pixied_state_write "$PIXIED_STATE_FILE"
+    fi
     pixied_hook_emit
 }
 

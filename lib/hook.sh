@@ -137,6 +137,11 @@ RUNTIME_HEAD
     export PIXI_HOME="$pixi_home"
     export PIXI_CACHE_DIR="$pixi_home/cache"
     export PIXI_NO_PATH_UPDATE=1
+RUNTIME_BODY
+        if [ "${PIXIED_OPTION_CLI_SET[auto_attach]:-0}" -eq 1 ] && [ "${PIXIED_AUTO_ATTACH:-}" = none ]; then
+            printf '    export PIXIED_AUTO_ATTACH=%q\n' "$PIXIED_AUTO_ATTACH"
+        fi
+        cat <<'RUNTIME_BODY'
 
     if [ -n "${ZSH_VERSION:-}" ]; then
         hook_shell=zsh

@@ -341,7 +341,10 @@ pixied_runtime_run() {
 
 # @description Attach to a direct Zellij session or start an interactive Bash.
 # A session-less shell opens an interactive Bash child; Zellij mode attaches
-# directly unless the caller is already inside Zellij.
+# directly unless the caller is already inside Zellij. The PIXIED_AUTO_ATTACH
+# environment variable or the --auto-attach flag overrides the auto-attach:
+# when the mode is none the runtime starts an interactive Bash without creating
+# or attaching to a Zellij session, so the session can be attached manually.
 #
 # @exitcode 0 When the child shell or attach process exits successfully.
 # @exitcode The child or attach process exit status, including 128 plus the
@@ -356,6 +359,13 @@ pixied_runtime_shell() {
     pixied_runtime_prepare
 
     pixied_require_tty
+    if [ "${PIXIED_AUTO_ATTACH:-auto}" = none ]; then
+        if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
+            pixied_info "auto-attach disabled by --auto-attach none; attach manually with: $PIXIED_ZELLIJ_PATH attach --create pixied"
+        fi
+        pixied_runtime_run_child bash -i
+        return $?
+    fi
     if [ "$PIXIED_SESSION_MANAGER" = none ] || [ -n "${ZELLIJ:-}" ]; then
         pixied_runtime_run_child bash -i
         return $?

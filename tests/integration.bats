@@ -793,6 +793,90 @@ CURL
     fi
 }
 
+@test "direct shell skips Zellij attach when auto-attach is none" {
+    local home="$PIXIED_TEST_ROOT/phase5-mode-none-home"
+    local data="$PIXIED_TEST_ROOT/phase5-mode-none-data"
+    local config="$PIXIED_TEST_ROOT/phase5-mode-none-config"
+    local state="$PIXIED_TEST_ROOT/phase5-mode-none-state"
+    local fake_bin="$PIXIED_TEST_ROOT/phase5-mode-none-bin"
+    local log="$PIXIED_TEST_ROOT/phase5-mode-none.log"
+    mkdir -p "$home"
+    setup_fake_commands "$fake_bin"
+    : >"$log"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
+        PIXIED_MACHINE_ID=phase5-mode-none PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh"
+    assert_success
+
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
+        PIXIED_AUTO_ATTACH=none \
+        bash -c '
+        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell" /dev/null
+    ' "$data"
+    assert_success
+    if grep -Fq -- "zellij attach --create" "$log"; then
+        pixied_test_fail "auto-attach=none shell unexpectedly attached to Zellij"
+    fi
+
+    : >"$log"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
+        bash -c '
+        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell --auto-attach none" /dev/null
+    ' "$data"
+    assert_success
+    if grep -Fq -- "zellij attach --create" "$log"; then
+        pixied_test_fail "shell --auto-attach none unexpectedly attached to Zellij"
+    fi
+
+    : >"$log"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
+        bash -c '
+        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell --auto-attach=auto" /dev/null
+    ' "$data"
+    assert_success
+    grep -Fq -- "zellij attach --create pixied" "$log" ||
+        pixied_test_fail "shell --auto-attach=auto did not attach to Zellij"
+}
+
+@test "shell --help prints the shell subcommand usage" {
+    run env HOME=/none PIXIED_MACHINE_ID=phase5-shell-help \
+        XDG_DATA_HOME=/none XDG_CONFIG_HOME=/none XDG_STATE_HOME=/none \
+        PATH="/usr/bin:/bin" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" shell --help
+    assert_success
+    assert_output --partial 'Usage: pixied shell [--auto-attach auto|none]'
+    assert_output --partial 'zellij attach --create pixied'
+}
+
+@test "hook --help prints the hook subcommand usage" {
+    run env HOME=/none PIXIED_MACHINE_ID=phase5-hook-help \
+        XDG_DATA_HOME=/none XDG_CONFIG_HOME=/none XDG_STATE_HOME=/none \
+        PATH="/usr/bin:/bin" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" hook --help
+    assert_success
+    assert_output --partial 'Usage: pixied hook <bash|zsh> [--auto-attach auto|none]'
+    assert_output --partial 'The target shell: bash or zsh.'
+}
+
+@test "hook bash --help prints the hook subcommand usage" {
+    run env HOME=/none PIXIED_MACHINE_ID=phase5-hook-bash-help \
+        XDG_DATA_HOME=/none XDG_CONFIG_HOME=/none XDG_STATE_HOME=/none \
+        PATH="/usr/bin:/bin" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" hook bash --help
+    assert_success
+    assert_output --partial 'Usage: pixied hook <bash|zsh> [--auto-attach auto|none]'
+}
+
 # US-102-2
 # US-103-1
 @test "generated hook activates only the isolated runtime environment" {
@@ -992,6 +1076,45 @@ CURL
     if grep -Fq -- 'zellij attach --create' "$log"; then
         pixied_test_fail "non-interactive hook unexpectedly started Zellij"
     fi
+}
+
+@test "interactive hook with --auto-attach none bakes none and skips Zellij auto-attach" {
+    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
+    local home="$PIXIED_TEST_ROOT/phase3-mode-none-home"
+    local data="$PIXIED_TEST_ROOT/phase3-mode-none-data"
+    local config="$PIXIED_TEST_ROOT/phase3-mode-none-config"
+    local state="$PIXIED_TEST_ROOT/phase3-mode-none-state"
+    local fake_bin="$PIXIED_TEST_ROOT/phase3-mode-none-bin"
+    local log="$PIXIED_TEST_ROOT/phase3-mode-none.log"
+    local machine_id=phase3-mode-none
+    local runtime_hook="$config/pixied/runtime-hook.bash"
+    mkdir -p "$home"
+    setup_fake_commands "$fake_bin"
+    : >"$log"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_SESSION_MANAGER=zellij \
+        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh"
+    assert_success
+
+    run env -u CI -u ZELLIJ -u PIXI_HOME -u PIXIED_RUNTIME_HOOK_ACTIVE -u PIXIED_STATE_DIR \
+        -u PIXIED_RUNTIME_STATE_FILE -u PIXIED_STATE_FILE -u PIXIED_DATA_DIR \
+        -u PIXIED_CONFIG_DIR -u PIXIED_PIXI_HOME HOME="$home" \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
+        PIXIED_COMMAND_LOG="$log" TERM=xterm-256color \
+        script -qec "bash -ic 'eval \"\$(bash \"$data/pixied/bin/pixied\" hook bash --auto-attach none)\"; printf \"hook-finished\\n\"'" \
+        /dev/null
+    assert_success
+    assert_output --partial 'hook-finished'
+    if grep -Fq -- 'zellij attach --create' "$log"; then
+        pixied_test_fail "auto-attach=none hook unexpectedly started Zellij"
+    fi
+    grep -Fq -- 'export PIXIED_AUTO_ATTACH=none' "$runtime_hook" ||
+        pixied_test_fail "hook did not bake PIXIED_AUTO_ATTACH=none into the runtime hook"
 }
 
 # US-103-3

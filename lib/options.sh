@@ -146,6 +146,65 @@ pixied_options_parse() {
     export PIXIED_INSTALL_ASSUME_YES
 }
 
+# @description Parse runtime options shared by the shell and hook commands.
+# Resolves the auto-attach setting from --auto-attach (CLI), PIXIED_AUTO_ATTACH
+# (environment), or the auto default. The resolved value is exported so a child
+# runtime inherits it. Positional arguments are collected in
+# PIXIED_RUNTIME_POSITIONAL for the command to validate after parsing.
+#
+# @arg $@ string Runtime command arguments (flags and positionals).
+# @set PIXIED_AUTO_ATTACH string Resolved auto-attach setting (auto|none).
+# @set PIXIED_RUNTIME_POSITIONAL array Positional arguments.
+# @set PIXIED_OPTION_CLI_SET[auto_attach] integer 1 when --auto-attach was passed.
+# @set PIXIED_OPTIONS_HELP integer 1 when --help, -h, or -help was passed.
+# @exitcode 0 When parsing succeeds.
+# @exitcode 2 When an option, a value, or PIXIED_AUTO_ATTACH is invalid.
+pixied_options_parse_runtime() {
+    local option value
+    PIXIED_AUTO_ATTACH=${PIXIED_AUTO_ATTACH:-auto}
+    PIXIED_RUNTIME_POSITIONAL=()
+    PIXIED_OPTION_CLI_SET[auto_attach]=0
+    PIXIED_OPTIONS_HELP=0
+    while [ "$#" -gt 0 ]; do
+        option=$1
+        case "$option" in
+        --help | -h | -help)
+            PIXIED_OPTIONS_HELP=1
+            ;;
+        --auto-attach)
+            [ "$#" -ge 2 ] || pixied_die "missing value for --auto-attach" "$PIXIED_EXIT_USAGE"
+            value=$2
+            case "$value" in
+            auto | none)
+                export PIXIED_AUTO_ATTACH=$value
+                PIXIED_OPTION_CLI_SET[auto_attach]=1
+                ;;
+            *) pixied_die "invalid auto-attach setting: $value" "$PIXIED_EXIT_USAGE" ;;
+            esac
+            shift
+            ;;
+        --auto-attach=*)
+            pixied_options_parse_runtime --auto-attach "${option#*=}"
+            ;;
+        --)
+            shift
+            while [ "$#" -gt 0 ]; do
+                PIXIED_RUNTIME_POSITIONAL+=("$1")
+                shift
+            done
+            ;;
+        --*) pixied_die "unknown option: $option" "$PIXIED_EXIT_USAGE" ;;
+        *) PIXIED_RUNTIME_POSITIONAL+=("$option") ;;
+        esac
+        shift
+    done
+    case "$PIXIED_AUTO_ATTACH" in
+    auto | none) ;;
+    *) pixied_die "invalid auto-attach setting: $PIXIED_AUTO_ATTACH" "$PIXIED_EXIT_USAGE" ;;
+    esac
+    export PIXIED_AUTO_ATTACH
+}
+
 # @description Read one value from the interactive installation wizard.
 # @arg $1 string The prompt to print.
 # @set PIXIED_OPTIONS_ANSWER string The value entered by the user.
