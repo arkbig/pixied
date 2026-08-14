@@ -4,7 +4,7 @@
 # The CLI core that interprets and executes commands.
 # Path resolution and state management are delegated to the libraries under lib.
 
-PIXIED_VERSION="0.2.0"
+PIXIED_VERSION="0.2.1"
 readonly PIXIED_VERSION
 
 # Get the absolute path to the pixied binary, resolving any symlinks
