@@ -134,19 +134,9 @@ machine間で再現されるのは、PixiEdenの設定、固定Pixi version、�
 
 local homeを事前に作成してもNFS同期は無効になりません。`nfs`modeではhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけをaccount homeとlocal homeの間で同期します。
 
-NFSモードの同期対象はhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけです。`pixied shell`または`pixied run`の起動前にallowlistをpullし、child commandまたはsessionがstatus 0で終了した場合だけpushします。account側とlocal側の双方が異なる変更を持つ場合は上書きせず、`PIXIED_STATE_DIR`配下に衝突artifactを保存して停止します。
+NFSモードの同期対象はhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけです。account homeを正として扱います。accountにあってlocalにないファイルは、`pixied shell`または`pixied run`の起動前にlocal homeへコピーします。
 
 ### 同期エラーからの復旧
-
-衝突が発生すると、`$PIXIED_STATE_DIR/conflicts/<artifact>/`に次の情報を永続保存します。
-
-- `account/`: account home側のコピー
-- `local/`: local home側のコピー
-- `meta/metadata`: 対象item、両側のhashまたは`missing`、baselineの値
-
-内容を確認して採用する側を決め、allowlist対象のaccount側とlocal側を同じ内容にそろえてから`pixied shell`または`pixied run`を再実行してください。両側が一致すると、同期処理がbaselineを再生成します。artifactは自動削除されないため、復旧確認後に必要な期間保管してから手動で整理します。
-
-baselineが壊れている場合は、`pixied`の実行中プロセスがないことを確認し、該当する`sync-baseline`を同じdirectory内へ退避してください。そのうえでallowlist対象の両側を同じ内容にそろえて`pixied shell`または`pixied run`を実行すると、baselineが未初期化の状態から再生成されます。両側が異なるまま実行すると、通常どおりconflictとして停止します。
 
 lockが残っている場合も、自動削除は行いません。該当する`pixied`プロセスが停止していることを確認した後、空のlock directoryだけを次のように削除してください。
 
@@ -181,7 +171,7 @@ uninstallは、current stateに記録された専用`PIXI_HOME`を管理境界�
 
 - `PIXIED_DATA_DIR`（データ、CLI、Pixi binary）: `${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
 - `PIXIED_CONFIG_DIR`（設定、生成runtime hook）: `${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
-- `PIXIED_STATE_DIR`（状態、machineごとの設定、同期baseline、衝突情報）: `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
+- `PIXIED_STATE_DIR`（状態、machineごとのruntime同期状態）: `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
 - CLI ランチャー: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`
 - マシンローカルツールとPixi Globalデータ: `$PIXIED_LOCAL_HOME`
 

@@ -137,21 +137,11 @@ Create `PIXIED_LOCAL_HOME` in the environment before installing when using `nfs`
 
 Creating the local home in advance does not disable NFS synchronization. In `nfs` mode, only `.bashrc`, `.bash_profile`, `.profile`, `.bash_logout`, `.zshrc`, `.zprofile`, `.zlogin`, and `.zlogout` directly under the home directory are synchronized between the account home and the local home.
 
-NFS mode synchronizes only `.bashrc`, `.bash_profile`, `.profile`, `.bash_logout`, `.zshrc`, `.zprofile`, `.zlogin`, and `.zlogout` directly under the home directory. The allowlist is pulled before `pixied shell` or `pixied run` launches, and pushed only when the child command or session exits with status 0. If both the account side and the local side contain different changes, PixiEden does not overwrite either side; it saves conflict artifacts under `PIXIED_STATE_DIR` and stops.
+NFS mode synchronizes only `.bashrc`, `.bash_profile`, `.profile`, `.bash_logout`, `.zshrc`, `.zprofile`, `.zlogin`, and `.zlogout` directly under the home directory. The account home is treated as the source of truth: when an account file has no local copy, PixiEden copies the local home before `pixied shell` or `pixied run` launches.
 
 ### Recovering from Synchronization Errors
 
-When a conflict occurs, PixiEden permanently saves the following information under `$PIXIED_STATE_DIR/conflicts/<artifact>/`:
-
-- `account/`: A copy from the account home
-- `local/`: A copy from the local home
-- `meta/metadata`: The target item, the hash or `missing` value for each side, and the baseline value
-
-Review the contents, decide which side to keep, make the account and local copies of the allowlisted item identical, and rerun `pixied shell` or `pixied run`. When both sides match, synchronization regenerates the baseline. Artifacts are not deleted automatically, so keep them as long as needed after confirming recovery and then clean them up manually.
-
-If the baseline is corrupted, first confirm that no `pixied` process is running and move the relevant `sync-baseline` aside within the same directory. Then make both allowlisted sides identical and run `pixied shell` or `pixied run` to regenerate the baseline from an uninitialized state. If the two sides still differ, it stops as a conflict as usual.
-
-Locks are not deleted automatically either. After confirming that the relevant `pixied` process has stopped, delete only the empty lock directory as follows:
+Locks are not deleted automatically. After confirming that the relevant `pixied` process has stopped, delete only the empty lock directory as follows:
 
 ```bash
 rmdir -- "$PIXIED_STATE_DIR/.lock"
@@ -184,7 +174,7 @@ The `PIXIED_*` names shown here describe resolved paths; they are not supported 
 
 - `PIXIED_DATA_DIR` (data, CLI, and Pixi binary): `${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
 - `PIXIED_CONFIG_DIR` (configuration and generated runtime hook): `${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
-- `PIXIED_STATE_DIR` (state, machine-specific settings, synchronization baseline, and conflict information): `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
+- `PIXIED_STATE_DIR` (state and machine-specific runtime synchronization state): `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
 - CLI launcher: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`
 - Machine-local tools and Pixi Global data: `$PIXIED_LOCAL_HOME`
 

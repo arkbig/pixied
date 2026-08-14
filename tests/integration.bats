@@ -1905,7 +1905,7 @@ CASES
 # US-106-2
 # US-106-3
 # US-106-4
-@test "NFS allowlist uses three-way sync and records conflicts" {
+@test "NFS allowlist uses account-authoritative one-way sync and warns on local divergence" {
     local home="$PIXIED_TEST_ROOT/phase4-sync-home"
     local local_home="$PIXIED_TEST_ROOT/phase4-sync-local"
     local data="$PIXIED_TEST_ROOT/phase4-sync-data"
@@ -1913,7 +1913,6 @@ CASES
     local state="$PIXIED_TEST_ROOT/phase4-sync-state"
     local state_file="$state/pixied/machines/phase4-sync/state"
     local baseline="$state/pixied/machines/phase4-sync/sync-baseline"
-    local artifact legacy_baseline
     mkdir -p "$home" "$local_home"
     printf 'account bashrc v1\n' >"$home/.bashrc"
     printf 'account bash profile v1\n' >"$home/.bash_profile"
@@ -1955,34 +1954,31 @@ CASES
     assert_equal 'account zshrc v1' "$(<"$local_home/.zshrc")"
     assert_equal 'account zprofile v1' "$(<"$home/.zprofile")"
     assert_equal 'account zprofile v1' "$(<"$local_home/.zprofile")"
-    assert_equal 'local zlogin v1' "$(<"$home/.zlogin")"
+    [ ! -e "$home/.zlogin" ] || pixied_test_fail "local-only file leaked to the account"
     assert_equal 'local zlogin v1' "$(<"$local_home/.zlogin")"
-    assert_equal 'local zlogout v1' "$(<"$home/.zlogout")"
+    [ ! -e "$home/.zlogout" ] || pixied_test_fail "local-only file leaked to the account"
     assert_equal 'local zlogout v1' "$(<"$local_home/.zlogout")"
-    assert_equal 'local profile v1' "$(<"$home/.profile")"
+    [ ! -e "$home/.profile" ] || pixied_test_fail "local-only file leaked to the account"
     assert_equal 'local profile v1' "$(<"$local_home/.profile")"
-    assert_equal 'local bash logout v1' "$(<"$home/.bash_logout")"
+    [ ! -e "$home/.bash_logout" ] || pixied_test_fail "local-only file leaked to the account"
     assert_equal 'local bash logout v1' "$(<"$local_home/.bash_logout")"
     assert_equal 'account outside' "$(<"$home/not-allowlisted")"
     assert_equal 'local outside' "$(<"$local_home/not-allowlisted")"
     assert_equal 'account zshenv' "$(<"$home/.zshenv")"
     assert_equal 'local zshenv' "$(<"$local_home/.zshenv")"
-    [ -f "$baseline" ] || pixied_test_fail "sync baseline was not created"
-    grep -Fq -- '.bashrc=' "$baseline" || pixied_test_fail "baseline has no bashrc entry"
-    grep -Fq -- '.zshrc=' "$baseline" || pixied_test_fail "baseline has no zshrc entry"
+    [ ! -e "$baseline" ] || pixied_test_fail "sync baseline should not be created"
     [ -f "$state_file" ] || pixied_test_fail "state file was not retained"
 
-    legacy_baseline="$baseline.legacy"
-    grep -E '^\.(bashrc|bash_profile|profile|bash_logout)=' "$baseline" >"$legacy_baseline"
-    mv -f "$legacy_baseline" "$baseline"
+    # Deleting a seeded local file re-seeds it from the account on the next run.
+    rm -f "$local_home/.bashrc"
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID=phase4-sync \
         bash "$data/pixied/bin/pixied" run bash -c 'exit 0'
     assert_success
-    grep -Fq -- '.zshrc=' "$baseline" ||
-        pixied_test_fail "legacy baseline was not upgraded"
+    assert_equal 'account bashrc v1' "$(<"$home/.bashrc")"
+    assert_equal 'account bashrc v1' "$(<"$local_home/.bashrc")"
 
     printf 'account bashrc v2\n' >"$home/.bashrc"
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
@@ -1991,7 +1987,9 @@ CASES
         PIXIED_MACHINE_ID=phase4-sync \
         bash "$data/pixied/bin/pixied" run bash -c 'exit 0'
     assert_success
-    assert_equal 'account bashrc v2' "$(<"$local_home/.bashrc")"
+    assert_equal 'account bashrc v2' "$(<"$home/.bashrc")"
+    assert_equal 'account bashrc v1' "$(<"$local_home/.bashrc")"
+    assert_output --partial 'not reflected to the account'
 
     printf 'local profile v2\n' >"$local_home/.profile"
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
@@ -2000,7 +1998,9 @@ CASES
         PIXIED_MACHINE_ID=phase4-sync \
         bash "$data/pixied/bin/pixied" run bash -c 'exit 0'
     assert_success
-    assert_equal 'local profile v2' "$(<"$home/.profile")"
+    [ ! -e "$home/.profile" ] || pixied_test_fail "local-only edit leaked to the account"
+    assert_equal 'local profile v2' "$(<"$local_home/.profile")"
+    assert_output --partial 'not reflected to the account'
 
     printf 'account bashrc conflict\n' >"$home/.bashrc"
     printf 'local bashrc conflict\n' >"$local_home/.bashrc"
@@ -2009,17 +2009,13 @@ CASES
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID=phase4-sync \
         bash "$data/pixied/bin/pixied" run bash -c 'printf child-ran >"$HOME/child-ran"'
-    assert_failure 1
-    assert_output --partial 'sync conflict detected'
-    [ ! -e "$local_home/child-ran" ] || pixied_test_fail "child ran after sync conflict"
+    assert_success
+    [ -e "$local_home/child-ran" ] || pixied_test_fail "child did not run"
     assert_equal 'account bashrc conflict' "$(<"$home/.bashrc")"
     assert_equal 'local bashrc conflict' "$(<"$local_home/.bashrc")"
-    artifact=$(find "$state/pixied/conflicts" -mindepth 1 -maxdepth 1 -type d -print -quit)
-    [ -n "$artifact" ] || pixied_test_fail "sync conflict artifact was not created"
-    [ -f "$artifact/account/.bashrc" ] || pixied_test_fail "account conflict copy is missing"
-    [ -f "$artifact/local/.bashrc" ] || pixied_test_fail "local conflict copy is missing"
-    grep -Fq -- 'item=.bashrc' "$artifact/meta/metadata" ||
-        pixied_test_fail "conflict metadata is missing"
+    assert_output --partial 'not reflected to the account'
+    [ ! -d "$state/pixied/conflicts" ] ||
+        pixied_test_fail "sync conflict artifact should not be created"
 }
 
 @test "atomic sync copy rejects a symlink source" {
@@ -2040,6 +2036,46 @@ CASES
     assert_output --partial 'sync source is not a regular file'
     [ ! -e "$root/destination/copied" ] ||
         pixied_test_fail "symlink source was copied"
+}
+
+@test "atomic sync remove tolerates an in-bounds symlink" {
+    local root="$PIXIED_TEST_ROOT/phase4-remove-link-home"
+    mkdir -p "$root"
+    printf 'linked content\n' >"$root/real-zshrc"
+    ln -s "$root/real-zshrc" "$root/.zshrc"
+
+    run bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        . "$1/lib/sync.sh"
+        pixied_enable_strict_mode
+        PIXIED_ACCOUNT_HOME="$2" pixied_sync_remove_file "$2/.zshrc"
+    ' bash "$PIXIED_REPO_ROOT" "$root"
+    assert_success
+    [ ! -e "$root/.zshrc" ] || pixied_test_fail "symlink entry was not removed"
+    [ -f "$root/real-zshrc" ] || pixied_test_fail "symlink target was removed"
+}
+
+@test "atomic sync remove rejects a symlink escaping account home" {
+    local root="$PIXIED_TEST_ROOT/phase4-remove-escape-home"
+    local outside="$PIXIED_TEST_ROOT/phase4-remove-escape-outside"
+    mkdir -p "$root" "$outside"
+    printf 'escaping\n' >"$outside/real-zshrc"
+    ln -s "$outside/real-zshrc" "$root/.zshrc"
+
+    run bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        . "$1/lib/sync.sh"
+        pixied_enable_strict_mode
+        PIXIED_ACCOUNT_HOME="$2" pixied_sync_remove_file "$2/.zshrc"
+    ' bash "$PIXIED_REPO_ROOT" "$root"
+    assert_failure 1
+    assert_output --partial 'sync target symlink escapes account home'
+    [ -L "$root/.zshrc" ] || pixied_test_fail "escaping symlink was removed"
+    [ -f "$outside/real-zshrc" ] || pixied_test_fail "external target was removed"
 }
 
 # US-106-3
@@ -2083,17 +2119,16 @@ CASES
         bash "$data/pixied/bin/pixied" run bash -c \
         'printf "signal-child\n" >"$HOME/.bashrc"; kill -TERM "$$"'
     assert_failure 143
-    assert_equal 'failed-child' "$(<"$home/.bashrc")"
+    assert_equal 'stable' "$(<"$home/.bashrc")"
     assert_equal 'signal-child' "$(<"$local_home/.bashrc")"
 }
 
-@test "NFS sync refuses an existing lock and invalid baseline" {
+@test "NFS sync refuses an existing lock" {
     local home="$PIXIED_TEST_ROOT/phase4-lock-home"
     local local_home="$PIXIED_TEST_ROOT/phase4-lock-local"
     local data="$PIXIED_TEST_ROOT/phase4-lock-data"
     local config="$PIXIED_TEST_ROOT/phase4-lock-config"
     local state="$PIXIED_TEST_ROOT/phase4-lock-state"
-    local baseline="$state/pixied/machines/phase4-lock/sync-baseline"
     mkdir -p "$home" "$local_home"
     printf 'stable\n' >"$home/.bashrc"
 
@@ -2123,15 +2158,6 @@ CASES
     [ ! -e "$local_home/lock-child" ] || pixied_test_fail "child ran while sync lock existed"
     [ -d "$state/pixied/.lock" ] || pixied_test_fail "existing sync lock was removed"
     rmdir "$state/pixied/.lock"
-
-    sed -i 's/^\.bashrc=.*/.bashrc=invalid/' "$baseline"
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase4-lock \
-        bash "$data/pixied/bin/pixied" run bash -c 'exit 0'
-    assert_failure 1
-    assert_output --partial 'invalid sync baseline hash'
 }
 
 @test "Zellij session residue prevents the clean-exit push" {

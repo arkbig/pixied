@@ -68,7 +68,7 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`lib/state.sh`|許可keyだけを扱うstate parser、path・値・hashの検証、lock、atomic write。|
 |`lib/pixi.sh`|専用Pixi binaryの取得・checksum検証、専用`PIXI_HOME`でのPixi実行、Global executableの検証。|
 |`lib/hook.sh`|Bash/zshからsourceできるruntime hookと、hookをsourceするshell codeの生成。|
-|`lib/sync.sh`|NFS modeの8ファイルallowlist、baseline、3-way判定、conflict artifact、clean exit後のpush。|
+|`lib/sync.sh`|NFS modeの8ファイルallowlist、account homeを正とする一方向同期(clean exit後のpushを含む)。|
 |`lib/session.sh`|child command、Zellij session、runtime内のdirect attach。|
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
 |`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
@@ -77,7 +77,7 @@ installはaccount home、home mode、local home、XDG pathを副作用の前に�
 
 machine stateは`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存する。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。既存資源をstateなしまたはhash不一致のまま引き継がず、未管理の既存Pixi pathへのGlobal provisionも行わない。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。
 
-runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。hookの評価でnetwork、Pixi Global変更、NFS同期全体を実行しない。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、NFS modeのpullと、status `0`で終わった場合だけpushを行う。signal、失敗、conflict、lock/hash失敗時はpushしない。
+runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。hookの評価でnetwork、Pixi Global変更、NFS同期全体を実行しない。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、NFS modeのpullと、status `0`で終わった場合だけpushを行う。signal、失敗、lock取得失敗時はpushしない。
 
 ## テストとrelease検証
 

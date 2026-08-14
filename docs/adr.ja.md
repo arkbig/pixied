@@ -46,7 +46,7 @@ shell起動時の自動有効化は便利だが、PixiEdenが既存のshell設�
 
 ## ADR-003
 
-NFS同期を固定allowlistと3-way比較に限定する
+NFS同期を固定allowlistとaccount authoritativeな一方向同期に限定する
 
 **Status**: Accepted
 
@@ -56,7 +56,7 @@ NFS modeではaccount homeとmachine-local homeの間で必要なshell設定を�
 
 ### Decision
 
-同期対象を`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`に限定し、baselineを使った3-way比較で片側の変更だけを反映する。`.zshenv`のように全zsh実行へ影響するファイルは対象外とする。双方の変更が異なる場合は上書きしない。
+同期対象を`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`に限定し、account homeを正として存在しないlocal fileのみをaccountからコピーする。local fileが存在する場合は上書きせず、localとaccountで異なる場合は警告のみとする。
 
 ### Rejected alternatives
 
