@@ -247,6 +247,10 @@ pixied_install() {
         pixied_options_validate_state_transition
         pixied_options_apply_state
         pixied_resolve_paths
+    else
+        # Seed installation defaults from the most recently installed peer
+        # machine so a fresh NFS host inherits a consistent configuration.
+        pixied_options_apply_peer_defaults
     fi
     pixied_options_wizard "$state_exists"
     pixied_options_validate_state_transition

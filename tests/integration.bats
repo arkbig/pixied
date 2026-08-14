@@ -517,6 +517,46 @@ PYPROJECT
         pixied_test_fail "selected local home was not persisted"
 }
 
+@test "fresh NFS install seeds defaults from the most recently installed peer machine" {
+    local home="$PIXIED_TEST_ROOT/peer-seed-home"
+    local peer_local_home="$PIXIED_TEST_ROOT/peer-seed-local"
+    local data="$PIXIED_TEST_ROOT/peer-seed-data"
+    local config="$PIXIED_TEST_ROOT/peer-seed-config"
+    local state="$PIXIED_TEST_ROOT/peer-seed-state"
+    local peer_id=peer-seed-machine
+    local new_id=new-seed-machine
+    mkdir -p "$home" "$peer_local_home"
+
+    # Install a peer machine first so its state can be used as the seed.
+    run env -i PATH="$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$peer_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes \
+            --home-mode nfs --local-home "$peer_local_home" --session-manager none
+    assert_success
+    [ -f "$state/pixied/machines/$peer_id/state" ] ||
+        pixied_test_fail "peer state is missing"
+
+    # Install a fresh machine on the same NFS account without specifying the
+    # local home or session manager; both must be seeded from the peer.
+    run env -i PATH="$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$new_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes --home-mode nfs
+    assert_success
+    [ -f "$state/pixied/machines/$new_id/state" ] ||
+        pixied_test_fail "fresh install state is missing"
+    # The default session manager would be zellij; the peer value wins.
+    grep -Fq -- "session_manager=none" "$state/pixied/machines/$new_id/state" ||
+        pixied_test_fail "session manager was not seeded from the peer machine"
+    grep -Fq -- "local_home=$peer_local_home" "$state/pixied/machines/$new_id/state" ||
+        pixied_test_fail "local home was not seeded from the peer machine"
+    grep -Fq -- "home_mode=nfs" "$state/pixied/machines/$new_id/state" ||
+        pixied_test_fail "home mode was not preserved"
+    grep -Fq -- "machine_id=$new_id" "$state/pixied/machines/$new_id/state" ||
+        pixied_test_fail "fresh machine kept its own machine id"
+}
+
 @test "release archive installs through the remote and local entrypoints" {
     local archive="$PIXIED_TEST_ROOT/pixied-release.tar.gz"
     local fake_bin="$PIXIED_TEST_ROOT/release-fake-bin"

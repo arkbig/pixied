@@ -402,3 +402,73 @@ pixied_options_apply_defaults() {
         export PIXIED_SESSION_MANAGER=${PIXIED_SESSION_MANAGER:-zellij}
     fi
 }
+
+# @description Seed installation defaults from the most recently installed peer machine.
+# When a fresh machine installs in NFS mode and at least one sibling machine
+# state already exists, the newest peer's configuration is used as the default
+# for home mode, local home, and session manager. Machine identity (machine id
+# and account home) is never inherited because every machine keeps its own.
+#
+# Peer selection reads the sibling state files under the machines directory and
+# picks the one with the newest modification time. Each candidate is validated
+# with pixied_state_load_external, which allows a different machine id and
+# account home. Loading happens inside a command substitution so a malformed or
+# untrusted peer state cannot abort this install nor leak into the current
+# process state.
+#
+# @set PIXIED_HOME_MODE string Defaulted from the latest NFS peer when not explicit.
+# @set PIXIED_LOCAL_HOME string Defaulted from the latest NFS peer when not explicit.
+# @set PIXIED_SESSION_MANAGER string Defaulted from the latest NFS peer when not explicit.
+# @exitcode 0 Always.
+pixied_options_apply_peer_defaults() {
+    local machines_dir mtime_list peer_file line peer_home_mode peer_local_home peer_session extracted rest
+
+    [ "${PIXIED_HOME_MODE:-}" = nfs ] || return 0
+    machines_dir=${PIXIED_STATE_DIR}/machines
+    [ -d "$machines_dir" ] || return 0
+
+    mtime_list=$(pixied_run mktemp)
+    pixied_register_temp "$mtime_list"
+    for peer_file in "$machines_dir"/*/state; do
+        [ -f "$peer_file" ] || continue
+        printf '%s\t%s\n' "$(pixied_run stat -c %Y -- "$peer_file")" "$peer_file"
+    done | sort -nr >"$mtime_list"
+
+    while IFS= read -r line; do
+        peer_file=${line#*$'\t'}
+        [ -n "$peer_file" ] || continue
+        # Load in a subshell so a failing or malicious peer state cannot abort
+        # this install and cannot populate the current process PIXIED_STATE.
+        extracted=$(
+            pixied_state_load_external "$peer_file" &&
+                printf '%s|%s|%s\n' \
+                    "${PIXIED_STATE[home_mode]:-}" \
+                    "${PIXIED_STATE[local_home]:-}" \
+                    "${PIXIED_STATE[session_manager]:-}"
+        ) || continue
+        peer_home_mode=${extracted%%|*}
+        rest=${extracted#*|}
+        peer_local_home=${rest%%|*}
+        peer_session=${rest#*|}
+        # Only seed from a peer that also ran in NFS mode so the defaults stay
+        # consistent with the requested installation.
+        [ "$peer_home_mode" = nfs ] || continue
+        if ! pixied_options_is_explicit home_mode; then
+            export PIXIED_HOME_MODE=$peer_home_mode
+        fi
+        if ! pixied_options_is_explicit local_home; then
+            export PIXIED_LOCAL_HOME=$peer_local_home
+            # pixied_resolve_paths already derived PIXIED_PIXI_HOME from the
+            # default local home; drop it so the later resolve recomputes the
+            # dedicated Pixi home from the seeded local home. An explicitly
+            # supplied pixi home is always preserved.
+            if ! pixied_options_is_explicit pixi_home; then
+                unset PIXIED_PIXI_HOME
+            fi
+        fi
+        if ! pixied_options_is_explicit session_manager; then
+            export PIXIED_SESSION_MANAGER=$peer_session
+        fi
+        break
+    done <"$mtime_list"
+}
