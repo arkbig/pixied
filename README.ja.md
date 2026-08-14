@@ -1,5 +1,5 @@
 ---
-🌐Language: [English](./README.md) ｜ **日本語**
+🌐Language: "[English](./README.md) ｜ **日本語**"
 ---
 
 # PixiEden
