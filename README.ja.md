@@ -1,8 +1,8 @@
----
-🌐Language: "[English](./README.md) ｜ **日本語**"
----
 
 # PixiEden
+
+| 🌐Language: | [English](./README.md) ｜ **日本語** |
+| ---------- | ------------------------------------ |
 
 PixiEdenは[Pixi](https://github.com/prefix-dev/pixi/)ベースの開発環境構築ツールです。コマンド名は`pixied`。
 

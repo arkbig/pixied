@@ -1,8 +1,7 @@
----
-🌐Language: "**English** ｜ [日本語](./README.ja.md)"
----
-
 # PixiEden
+
+| 🌐Language: | **English** ｜ [日本語](./README.ja.md) |
+| ---------- | --------------------------------------- |
 
 > [!WARNING]
 > This document is an AI-generated translation. The original Japanese version is human-reviewed.
