@@ -361,9 +361,12 @@ PYPROJECT
         cd -- "$1"
         eval "$(bash "$2" generate direnv --print-envrc)"
         printf "home=%s\n" "$HOME"
+        printf "path=%s\n" "$PATH"
     ' bash "$project" "$data/pixied/bin/pixied"
     assert_success
     assert_output --partial "home=$account_home"
+    assert_output --partial "path=$account_home/.local/bin"
+    assert_output --partial "path=$local_home/.local/bin"
 }
 
 @test "command execution is observable" {
@@ -2057,6 +2060,19 @@ CASES
     assert_output --partial 'not reflected to the account'
     [ ! -d "$state/pixied/conflicts" ] ||
         pixied_test_fail "sync conflict artifact should not be created"
+
+    # Runtime PATH (shell/hook layer) must include both the account-side and
+    # local-side ~/.local/bin in NFS mode.
+    run env -u PIXI_HOME -u XDG_BIN_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID=phase4-sync \
+        bash "$data/pixied/bin/pixied" run bash -c 'printf "%s" "$PATH"'
+    assert_success
+    assert_output --partial "$home/.local/bin" ||
+        pixied_test_fail "account-side ~/.local/bin missing from runtime PATH"
+    assert_output --partial "$local_home/.local/bin" ||
+        pixied_test_fail "local-side ~/.local/bin missing from runtime PATH"
 }
 
 @test "atomic sync copy rejects a symlink source" {

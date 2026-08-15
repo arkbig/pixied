@@ -162,7 +162,7 @@ PATH_RESULT
         return 1
     }
     path_result=""
-    for path_entry in "$command_bin" "$data_dir/bin" "$pixi_home/bin"; do
+    for path_entry in "$command_bin" "$local_home/.local/bin" "$data_dir/bin" "$pixi_home/bin"; do
         [ -n "$path_entry" ] || continue
         if ! _pixied_path_is_present "$path_entry"; then
             [ -z "$path_result" ] || path_result="${path_result}:"

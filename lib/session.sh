@@ -264,7 +264,9 @@ pixied_path_prepend_unique() {
 # @set PIXI_HOME string The dedicated Pixi home.
 # @set PIXI_CACHE_DIR string The dedicated Pixi cache.
 # @set PIXI_NO_PATH_UPDATE integer Disables Pixi PATH mutation.
-# @set PATH string The deduplicated runtime PATH.
+# @set PATH string The deduplicated runtime PATH, including both the
+# account-side ~/.local/bin ($PIXIED_COMMAND_BIN) and the local-side
+# ~/.local/bin ($PIXIED_LOCAL_HOME/.local/bin).
 # @exitcode 0 Always.
 pixied_runtime_export_environment() {
     export HOME=$PIXIED_LOCAL_HOME
@@ -274,7 +276,8 @@ pixied_runtime_export_environment() {
     export PIXIED_RUNTIME_STATE_FILE=$PIXIED_STATE_FILE
     export PIXIED_RUNTIME_HOOK_ACTIVE=1
     PATH=$(pixied_path_prepend_unique \
-        "$PIXIED_COMMAND_BIN" "$PIXIED_DATA_DIR/bin" "$PIXIED_PIXI_HOME/bin")
+        "$PIXIED_COMMAND_BIN" "$PIXIED_LOCAL_HOME/.local/bin" \
+        "$PIXIED_DATA_DIR/bin" "$PIXIED_PIXI_HOME/bin")
     export PATH
 }
 
@@ -324,6 +327,7 @@ pixied_runtime_run_child() {
 # @exitcode 0 When the runtime is ready.
 pixied_runtime_prepare() {
     pixied_runtime_load_state
+    pixied_ensure_local_home_bin
     pixied_runtime_export_environment
     pixied_sync_runtime_begin
 }

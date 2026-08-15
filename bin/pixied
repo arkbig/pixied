@@ -260,6 +260,7 @@ pixied_install() {
 
     pixied_step "Preparing the dedicated Pixi environment for $PIXIED_MACHINE_ID"
     pixied_run mkdir -p -- "$PIXIED_STATE_DIR" "$PIXIED_MACHINE_STATE_DIR" "$PIXIED_CONFIG_DIR"
+    pixied_ensure_local_home_bin
     pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
     if [ "$state_exists" -eq 1 ]; then
         pixied_state_load "$PIXIED_STATE_FILE"
