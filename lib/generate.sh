@@ -247,6 +247,10 @@ pixied_generate_project_shell_hook() {
     printf 'export PIXI_CACHE_DIR=%q\n' "$PIXI_CACHE_DIR"
     printf 'export PIXI_NO_PATH_UPDATE=%q\n' "$PIXI_NO_PATH_UPDATE"
     printf 'export PIXIED_RUNTIME_STATE_FILE=%q\n' "$PIXIED_RUNTIME_STATE_FILE"
+    # Export the runtime PATH so the evaluated hook seeds both the
+    # account-side and local-side ~/.local/bin in NFS mode. The export runs in
+    # the subshell, so this printf is the only path where it reaches the shell.
+    printf 'export PATH=%q\n' "$PATH"
     pixied_pixi_run shell-hook "$@"
 }
 

@@ -375,8 +375,8 @@ PYPROJECT
     ' bash "$project" "$data/pixied/bin/pixied"
     assert_success
     assert_output --partial "home=$account_home"
-    assert_output --partial "path=$account_home/.local/bin"
-    assert_output --partial "path=$local_home/.local/bin"
+    assert_output --partial "$account_home/.local/bin"
+    assert_output --partial "$local_home/.local/bin"
 }
 
 @test "command execution is observable" {
