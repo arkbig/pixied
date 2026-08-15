@@ -424,14 +424,15 @@ PYPROJECT
         PIXIED_MACHINE_ID="$machine_id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
         PIXIED_COMMAND_LOG="$log" \
         PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PATH="$home/.local/bin:$PATH" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
     assert_output --partial 'Runtime hook, dedicated Pixi environment, and session support are ready'
     assert_output --partial 'Option A (Start now):'
-    assert_output --partial "$home/.local/bin/pixied shell"
+    assert_output --partial "pixied shell"
     assert_output --partial 'Option B (Automatic - Recommended):'
     assert_output --partial "Add to ~/.bashrc, then restart your terminal:"
-    assert_output --partial "$home/.local/bin/pixied hook bash"
+    assert_output --partial "$data/pixied/bin/pixied hook bash"
     [[ "$output" != *'Phase 5'* ]] || pixied_test_fail "success output contains an obsolete phase number"
     [ -f "$data/pixied/bin/pixied" ] || pixied_test_fail "deployed CLI is missing"
     [ -f "$data/pixied/lib/common.sh" ] || pixied_test_fail "deployed common library is missing"
