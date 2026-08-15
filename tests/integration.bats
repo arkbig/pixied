@@ -247,9 +247,19 @@ assert_semver() {
 
     run env PATH=/usr/bin:/bin HOME="$home" PIXI_HOME="$host_pixi_home" bash -c \
         'cd -- "$1" && bash "$2" generate direnv' bash "$protected" "$cli"
-    assert_failure 1
-    assert_output --partial 'refusing to overwrite existing generated file'
-    assert_equal 'keep this file' "$(<"$protected/.envrc")"
+    assert_success
+    grep -Fq -- 'keep this file' "$protected/.envrc" ||
+        pixied_test_fail "generate direnv removed the existing .envrc content"
+    grep -Fq -- "if [ -x $cli ]; then" "$protected/.envrc" ||
+        pixied_test_fail "generate direnv did not append the activation block"
+    grep -Fq -- '# >>> pixied direnv integration' "$protected/.envrc" ||
+        pixied_test_fail "generate direnv did not mark the inserted block"
+    # Re-running must not duplicate the activation block.
+    run env PATH=/usr/bin:/bin HOME="$home" PIXI_HOME="$host_pixi_home" bash -c \
+        'cd -- "$1" && bash "$2" generate direnv' bash "$protected" "$cli"
+    assert_success
+    [ "$(grep -c -- '# >>> pixied direnv integration' "$protected/.envrc")" -eq 1 ] ||
+        pixied_test_fail "generate direnv left a duplicate pixied block"
 
     run env PATH=/usr/bin:/bin HOME="$home" PIXI_HOME="$host_pixi_home" bash -c \
         'cd -- "$1" && bash "$2" generate direnv' bash "$PIXIED_TEST_ROOT" "$cli"
