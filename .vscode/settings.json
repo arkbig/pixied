@@ -11,5 +11,6 @@
         "pyproject",
         "shdoc",
         "shfmt"
-    ]
+    ],
+    "markdownlint.configFile": ".config/.markdownlint.yaml"
 }
