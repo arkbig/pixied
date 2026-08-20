@@ -95,23 +95,6 @@ pixied_generate_validate_definition() {
     esac
 }
 
-# @description Validate an optional project lock file and report whether it exists.
-# @arg $1 string The project root.
-# @stdout 1 when pixi.lock exists, otherwise 0.
-# @exitcode 0 Always when the optional file is valid or absent.
-pixied_generate_lock_present() {
-    local lock_file="$1/pixi.lock"
-    if [ -e "$lock_file" ] || [ -L "$lock_file" ]; then
-        [ ! -L "$lock_file" ] ||
-            pixied_die "Pixi lock file must not be a symlink: $lock_file"
-        [ -f "$lock_file" ] ||
-            pixied_die "Pixi lock file is not a regular file: $lock_file"
-        printf '1'
-    else
-        printf '0'
-    fi
-}
-
 # @description Return the absolute PixiEden CLI path to embed during generation.
 # The generated file must not resolve a different pixied executable from PATH
 # when it is evaluated later.
@@ -254,52 +237,393 @@ pixied_generate_project_shell_hook() {
     pixied_pixi_run shell-hook "$@"
 }
 
-# @description Return the Dockerfile content for a Pixi project.
-# @arg $1 integer Whether pixi.lock is present.
-# @arg $2 string The pinned Pixi version.
-# @arg $3 integer Whether to install during the image build.
+# @description Resolve the Pixi version used to tag the generated images.
+# Prefers PIXIED_PIXI_VERSION when set, otherwise the pinned default. The
+# resolved value is either a concrete semver (without a leading v) or the
+# literal "latest" marker.
+#
+# @stdout The resolved Pixi version.
+# @exitcode 0 When a supported version is resolved.
+# @exitcode 1 When the version cannot be resolved.
+# @see PIXIED_PIXI_VERSION_DEFAULT
+pixied_generate_resolve_pixi_version() {
+    local version="${PIXIED_PIXI_VERSION:-$PIXIED_PIXI_VERSION_DEFAULT}"
+    case "$version" in
+    latest) printf 'latest' ;;
+    "")
+        pixied_die "could not resolve a Pixi version; set PIXIED_PIXI_VERSION to a concrete version (e.g. ${PIXIED_PIXI_VERSION_DEFAULT}) or 'latest' and rerun" \
+            "$PIXIED_EXIT_FAILURE"
+        ;;
+    *)
+        if ! printf '%s' "$version" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            pixied_die "unsupported Pixi version for generation: $version; set PIXIED_PIXI_VERSION to a concrete version (e.g. ${PIXIED_PIXI_VERSION_DEFAULT}) or 'latest'" \
+                "$PIXIED_EXIT_FAILURE"
+        fi
+        printf '%s' "${version#v}"
+        ;;
+    esac
+}
+
+# @description Build the ghcr.io/prefix-dev/pixi base image reference.
+# A concrete version yields "<version>-<variant>" while the "latest" marker
+# yields the bare variant tag.
+#
+# @arg $1 string The resolved Pixi version or "latest".
+# @arg $2 string The variant (trixie, trixie-slim, plucky).
+# @stdout The fully qualified base image reference.
+# @exitcode 0 Always.
+pixied_generate_base_image() {
+    local version=$1 variant=$2
+    if [ "$version" = latest ]; then
+        printf 'ghcr.io/prefix-dev/pixi:%s' "$variant"
+    else
+        printf 'ghcr.io/prefix-dev/pixi:%s-%s' "$version" "$variant"
+    fi
+}
+
+# @description Write generated content to a temporary file beside the target.
+# The temporary file lives on the same filesystem so the final move is atomic.
+#
+# @arg $1 string The target output path.
+# @arg $2 string The content to write.
+# @arg $3 string The file mode (default 0644).
+# @stdout The temporary file path.
+# @exitcode 0 When the temporary file is written.
+# @exitcode 1 When writing fails.
+pixied_generate_make_temp() {
+    local target=$1 content=$2 mode=${3:-0644} directory base_name temporary
+    directory=${target%/*}
+    [ -d "$directory" ] || pixied_die "output directory is missing: $directory"
+    base_name=${target##*/}
+    temporary=$(pixied_run mktemp --tmpdir="$directory" ".${base_name}.pixied.XXXXXX")
+    pixied_register_temp "$temporary"
+    printf '%s\n' "$content" >"$temporary"
+    pixied_run chmod "$mode" -- "$temporary"
+    printf '%s' "$temporary"
+}
+
+# @description Atomically commit generated files, backing up existing targets.
+# In force mode each existing target is first moved to a single-generation ".bak"
+# backup. All generated temps are then moved into place; if any move fails, the
+# already-committed targets are rolled back to their ".bak" originals (or removed
+# when no original existed) so a failed commit never leaves a partial update.
+#
+# @arg $1 integer Enable force mode (1) or not (0).
+# @arg $@ string Alternating target and temporary file paths.
+# @exitcode 0 When all files are committed.
+# @exitcode 1 When a verification or commit step fails.
+pixied_generate_commit_files() {
+    local force=$1
+    shift
+    local -a targets=() temps=()
+    local target temp i
+    while [ "$#" -ge 2 ]; do
+        targets+=("$1")
+        temps+=("$2")
+        shift 2
+    done
+
+    # Pre-commit verification: every temp exists and every target dir is writable.
+    for temp in "${temps[@]}"; do
+        [ -f "$temp" ] || pixied_die "generated content is missing; cannot commit: $temp"
+    done
+    for target in "${targets[@]}"; do
+        [ -d "${target%/*}" ] || pixied_die "output directory is missing: ${target%/*}"
+        [ -w "${target%/*}" ] || pixied_die "output directory is not writable: ${target%/*}"
+    done
+
+    # Backup phase (force): move every existing target aside before any change.
+    if [ "$force" -eq 1 ]; then
+        for target in "${targets[@]}"; do
+            if [ -e "$target" ] || [ -L "$target" ]; then
+                pixied_run rm -f -- "$target.bak"
+                pixied_run mv -f -- "$target" "$target.bak" ||
+                    pixied_die "failed to back up existing file; aborted before changes: $target"
+            fi
+        done
+    fi
+
+    # Commit phase: move each temp to its target, rolling back on the first error.
+    local -a committed=()
+    for i in "${!targets[@]}"; do
+        target=${targets[$i]}
+        temp=${temps[$i]}
+        if pixied_run mv -f -- "$temp" "$target"; then
+            committed+=("$i")
+        else
+            for j in "${committed[@]}"; do
+                if [ -e "${targets[$j]}.bak" ]; then
+                    pixied_run mv -f -- "${targets[$j]}.bak" "${targets[$j]}"
+                else
+                    pixied_run rm -f -- "${targets[$j]}"
+                fi
+            done
+            pixied_run rm -f -- "$temp"
+            pixied_die "failed to commit generated file; rolled back partial changes. Original files are preserved in .bak backups where they existed: $target"
+        fi
+    done
+}
+
+# @description Return the multi-stage Dockerfile used by CI.
+# The builder installs the project environment and the slim runner copies it
+# into /opt/pixi. The source is never copied; the caller mounts it at /workspace
+# at runtime. The runner creates the "app" identity with the configured
+# APP_UID/APP_GID without remapping existing system users or groups.
+#
+# @arg $1 string The resolved Pixi version.
 # @stdout The generated Dockerfile content.
 # @exitcode 0 Always.
 pixied_generate_dockerfile_content() {
-    local lock_present=$1 pixi_version=$2 install_during_build=${3:-1}
+    local pixi_version=$1
     cat <<'DOCKERFILE'
-# syntax=docker/dockerfile:1.19
-# Generated by pixied generate. Do not edit.
+# Generated by `pixied generate dockerfile`.
+#
+# Build context: the project root containing pixi.toml and pixi.lock.
+# The source is not copied into the image; mount it at /workspace:
+#   docker build -t my-ci -f Dockerfile .
+#   docker run --rm -v "$PWD":/workspace --user "$(id -u):$(id -g)" my-ci
 DOCKERFILE
-    printf 'ARG PIXI_VERSION=%s\n' "$pixi_version"
-    cat <<'DOCKERFILE'
-FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}
-
-WORKDIR /workspace
-
-COPY --exclude=.pixi . .
-DOCKERFILE
-    if [ "$install_during_build" -eq 1 ]; then
-        if [ "$lock_present" -eq 1 ]; then
-            printf 'RUN rm -rf -- .pixi && pixi install --locked\n'
-        else
-            printf 'RUN rm -rf -- .pixi && pixi install\n'
-        fi
+    if [ "$pixi_version" = latest ]; then
+        printf 'ARG PIXI_VERSION=latest\n\n'
     else
-        printf '# The Dev Container mounts .pixi as a volume; postCreateCommand installs into that volume.\n'
+        printf 'ARG PIXI_VERSION=%s\n\n' "$pixi_version"
     fi
     cat <<'DOCKERFILE'
+# -----------------------------------------------------------------------------
+# Builder stage: install the project environment
+# -----------------------------------------------------------------------------
+DOCKERFILE
+    if [ "$pixi_version" = latest ]; then
+        printf 'FROM %s AS builder\n' "$(pixied_generate_base_image "$pixi_version" trixie)"
+    else
+        printf 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-trixie AS builder\n'
+    fi
+    cat <<'DOCKERFILE'
+ENV PIXI_HOME=/opt/pixi
+WORKDIR /workspace
+COPY pixi.toml pixi.lock ./
+RUN mkdir -p "$PIXI_HOME" && \
+    printf 'detached-environments = "%s/projects"\n' "$PIXI_HOME" > "$PIXI_HOME/config.toml" && \
+    pixi install --locked && \
+    environment_bin=$(find "$PIXI_HOME/projects" -mindepth 4 -maxdepth 4 -type d -path '*/envs/default/bin' -print -quit) && \
+    test -n "$environment_bin" || { echo 'Pixi default environment was not installed' >&2; exit 1; }; \
+    rm -rf "$PIXI_HOME/projects/bin" && \
+    ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"
+DOCKERFILE
+    cat <<'DOCKERFILE'
 
-ENV PATH="/workspace/.pixi/envs/default/bin:${PATH}"
+# -----------------------------------------------------------------------------
+# Runtime stage: run the project as the configured non-root user
+# -----------------------------------------------------------------------------
+DOCKERFILE
+    if [ "$pixi_version" = latest ]; then
+        printf 'FROM %s AS runner\n' "$(pixied_generate_base_image "$pixi_version" trixie-slim)"
+    else
+        printf 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-trixie-slim AS runner\n'
+    fi
+    cat <<'DOCKERFILE'
+ARG APP_UID=1000
+ARG APP_GID=1000
+ENV PIXI_HOME=/opt/pixi
+ENV PATH=${PIXI_HOME}/projects/bin:${PIXI_HOME}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN if ! getent group "${APP_GID}" >/dev/null; then \
+        groupadd --gid "${APP_GID}" app; \
+    fi && \
+    if ! getent passwd "${APP_UID}" >/dev/null; then \
+        useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home app; \
+    fi
+WORKDIR /workspace
+COPY --from=builder ${PIXI_HOME} ${PIXI_HOME}
+USER ${APP_UID}:${APP_GID}
 DOCKERFILE
 }
 
-# @description Return the DevContainer definition content.
-# @arg $1 integer Whether pixi.lock is present.
+# @description Return the single-stage Dev Container Dockerfile content.
+# .env is sourced as a shell environment file, so arbitrary exported settings
+# can be added alongside CONTAINER_UID/GID. The container IDs are still
+# validated as decimal integers, and the configured identity is exposed as
+# the app user. Pixi installs after initializing a missing project manifest.
+#
+# @arg $1 string The resolved Pixi version.
+# @stdout The generated Dockerfile content.
+# @exitcode 0 Always.
+pixied_generate_devcontainer_dockerfile_content() {
+    local pixi_version=$1
+    cat <<'DOCKERFILE'
+# Generated by `pixied generate dockerfile`.
+#
+# Build context: the project root. Ensure .devcontainer/.env exists.
+# Override the Pixi version: docker build --build-arg PIXI_VERSION=<version> .
+DOCKERFILE
+    if [ "$pixi_version" = latest ]; then
+        printf 'ARG PIXI_VERSION=latest\n\n'
+        printf 'FROM %s\n' "$(pixied_generate_base_image "$pixi_version" plucky)"
+    else
+        printf 'ARG PIXI_VERSION=%s\n\n' "$pixi_version"
+        printf 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-plucky\n'
+    fi
+    cat <<'DOCKERFILE'
+ENV PIXI_HOME=/opt/pixi
+ENV PATH=${PIXI_HOME}/projects/bin:${PIXI_HOME}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+WORKDIR /workspace
+COPY pixi.tom[l] pixi.loc[k] .devcontainer/.env ./
+COPY .devcontainer/.env .devcontainer/.env
+COPY .devcontainer/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+RUN set -a && \
+    . /workspace/.devcontainer/.env && \
+    set +a && \
+    CONTAINER_UID=${CONTAINER_UID:-1000} && \
+    CONTAINER_GID=${CONTAINER_GID:-1000} && \
+    validate_id() { \
+        id_val="$1"; name="$2"; \
+        case "$id_val" in ''|*[!0-9]*) \
+            echo "invalid $name: must be a decimal integer" >&2; exit 1 ;; \
+        esac; \
+        if [ "$id_val" -lt 0 ] || [ "$id_val" -gt 2147483647 ]; then \
+            echo "invalid $name: out of range [0,2147483647]" >&2; exit 1; \
+        fi; \
+    } && \
+    validate_id "$CONTAINER_UID" CONTAINER_UID && \
+    validate_id "$CONTAINER_GID" CONTAINER_GID && \
+    if getent group app >/dev/null; then \
+        [ "$(getent group app | cut -d: -f3)" = "$CONTAINER_GID" ] || { \
+            echo "app group does not have CONTAINER_GID=$CONTAINER_GID" >&2; exit 1; \
+        }; \
+    else \
+        existing_group=$(getent group "$CONTAINER_GID" | cut -d: -f1) && \
+        if [ -n "$existing_group" ]; then \
+            groupmod --new-name app "$existing_group"; \
+        else \
+            groupadd --gid "$CONTAINER_GID" app; \
+        fi; \
+    fi && \
+    if getent passwd app >/dev/null; then \
+        [ "$(id -u app)" = "$CONTAINER_UID" ] || { \
+            echo "app user does not have CONTAINER_UID=$CONTAINER_UID" >&2; exit 1; \
+        }; \
+    else \
+        existing_user=$(getent passwd "$CONTAINER_UID" | cut -d: -f1) && \
+        if [ -n "$existing_user" ]; then \
+            [ "$existing_user" != root ] || { \
+                echo 'CONTAINER_UID=0 cannot provide a non-root app user' >&2; exit 1; \
+            }; \
+            usermod --login app --home /home/app --move-home "$existing_user"; \
+        else \
+            useradd --uid "$CONTAINER_UID" --gid "$CONTAINER_GID" --create-home app; \
+        fi; \
+    fi && \
+    chown "$CONTAINER_UID:$CONTAINER_GID" /workspace && \
+    install -d -o "$CONTAINER_UID" -g "$CONTAINER_GID" "$PIXI_HOME" && \
+    printf 'detached-environments = "%s/projects"\n' "$PIXI_HOME" > "$PIXI_HOME/config.toml" && \
+    apt-get update && apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -a && \
+    . /workspace/.devcontainer/.env && \
+    set +a && \
+    CONTAINER_UID=${CONTAINER_UID:-1000} && \
+    CONTAINER_GID=${CONTAINER_GID:-1000} && \
+    app_user=app && \
+    if [ ! -f pixi.toml ]; then \
+        rm -f -- pixi.lock && \
+        su "$app_user" -c "PIXI_HOME=$PIXI_HOME pixi init"; \
+    fi && \
+    if [ -f pixi.lock ]; then \
+        su "$app_user" -c "PIXI_HOME=$PIXI_HOME pixi install --locked"; \
+    else \
+        su "$app_user" -c "PIXI_HOME=$PIXI_HOME pixi install"; \
+    fi && \
+    environment_dir=$(find "$PIXI_HOME/projects" -mindepth 3 -maxdepth 3 -type d -path '*/envs/default' -print -quit) && \
+    test -n "$environment_dir" || { echo 'Pixi default environment was not installed' >&2; exit 1; }; \
+    environment_bin="$environment_dir/bin" && \
+    install -d -o "$CONTAINER_UID" -g "$CONTAINER_GID" -- "$environment_bin" && \
+    rm -rf "$PIXI_HOME/projects/bin" && \
+    ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+DOCKERFILE
+}
+
+# @description Return the Dev Container ENTRYPOINT script content.
+# The script sources .env as a shell environment file for CONTAINER_UID/GID and
+# any additional exported settings, corrects ownership of app HOME and
+# /opt/pixi, and runs the command as app unless a privilege switcher leads.
+#
+# @stdout The generated entrypoint script content.
+# @exitcode 0 Always.
+pixied_generate_entrypoint_content() {
+    cat <<'ENTRYPOINT'
+#!/usr/bin/env bash
+# Generated by pixied generate.
+set -euo pipefail
+
+ENV_FILE="/workspace/.devcontainer/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "pixied entrypoint: $ENV_FILE is missing; mount .devcontainer/.env or regenerate with 'pixied generate devcontainer'" >&2
+    exit 1
+fi
+
+# Source the mounted .env so arbitrary settings can be exported to the
+# container command. This intentionally executes shell code from the file.
+CONTAINER_UID="1000"
+CONTAINER_GID="1000"
+set -a
+source "$ENV_FILE"
+set +a
+CONTAINER_UID=${CONTAINER_UID:-1000}
+CONTAINER_GID=${CONTAINER_GID:-1000}
+
+validate_id() {
+    local id_val=$1 name=$2
+    [[ "$id_val" =~ ^[0-9]+$ ]] || {
+        echo "pixied entrypoint: invalid $name: $id_val (must be a decimal integer)" >&2
+        exit 1
+    }
+    [ "$id_val" -ge 0 ] && [ "$id_val" -le 2147483647 ] || {
+        echo "pixied entrypoint: invalid $name: $id_val (out of range [0,2147483647])" >&2
+        exit 1
+    }
+}
+validate_id "$CONTAINER_UID" CONTAINER_UID
+validate_id "$CONTAINER_GID" CONTAINER_GID
+
+chown_if_needed() {
+    local path=$1 owner group
+    [ -e "$path" ] || return 0
+    owner=$(stat -c %u -- "$path" 2>/dev/null || true)
+    group=$(stat -c %g -- "$path" 2>/dev/null || true)
+    [ "$owner" = "$CONTAINER_UID" ] && [ "$group" = "$CONTAINER_GID" ] && return 0
+    chown -R "${CONTAINER_UID}:${CONTAINER_GID}" "$path"
+}
+
+app_user=app
+if ! getent passwd "$app_user" >/dev/null; then
+    app_user=$(getent passwd "${CONTAINER_UID:-1000}" | cut -d: -f1)
+fi
+[ -n "$app_user" ] || app_user=app
+
+chown_if_needed "/home/${app_user}"
+chown_if_needed /opt/pixi
+
+first_arg=${1:-}
+case "$(basename -- "${first_arg%% *}")" in
+gosu) exec "$@" ;;
+esac
+
+if [ "$(id -u)" = 0 ]; then
+    exec gosu "$app_user" "$@"
+fi
+exec "$@"
+ENTRYPOINT
+}
+
+# @description Return the Dev Container definition content.
 # @stdout The generated devcontainer.json content.
 # @exitcode 0 Always.
-pixied_generate_devcontainer_content() {
-    local lock_present=$1 install_command
-    if [ "$lock_present" -eq 1 ]; then
-        install_command='pixi install --locked'
-    else
-        install_command='pixi install'
-    fi
+pixied_generate_devcontainer_json_content() {
     cat <<'DEVCONTAINER'
 {
     "name": "Pixi project",
@@ -309,14 +633,20 @@ pixied_generate_devcontainer_content() {
     },
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
-    "mounts": [
-        "type=volume,target=/workspace/.pixi"
-    ],
-DEVCONTAINER
-    printf '  "postCreateCommand": "%s"\n' "$install_command"
-    cat <<'DEVCONTAINER'
+    "remoteUser": "app"
 }
 DEVCONTAINER
+}
+
+# @description Return the Dev Container .env content with the host UID/GID.
+# @arg $1 string The host UID.
+# @arg $2 string The host GID.
+# @stdout The generated .env content.
+# @exitcode 0 Always.
+pixied_generate_devcontainer_env_content() {
+    local uid=$1 gid=$2
+    printf 'CONTAINER_UID=%s\n' "$uid"
+    printf 'CONTAINER_GID=%s\n' "$gid"
 }
 
 # @description Check that a generated output path is not already present.
@@ -357,75 +687,163 @@ pixied_generate_write_file() {
     fi
 }
 
+# @description Print the usage for regular project integration generation.
+# @stdout The generate command usage.
+# @exitcode 0 Always.
+pixied_generate_usage() {
+    printf '%s\n' "usage: pixied generate <direnv|devcontainer|dockerfile> [--print-envrc]"
+    pixied_generate_force_usage
+}
+
+# @description Print the usage for force-enabled project integration generation.
+# @stdout The force-enabled generate command usage.
+# @exitcode 0 Always.
+pixied_generate_force_usage() {
+    printf '%s\n' "usage: pixied generate <devcontainer|dockerfile> --force"
+}
+
 # @description Generate a project integration file or print direnv activation code.
 # Supported formats are direnv, devcontainer, and dockerfile. Normal file
 # generation reads only the nearest project definition and never loads PixiEden
 # state or runs Pixi. `direnv --print-envrc` is the activation output mode.
+# The --force flag is accepted for dockerfile and devcontainer, which use it to
+# back up existing generated files before replacing them.
 #
 # @arg $1 string The output format.
-# @arg $2 string Optional --print-envrc flag for the direnv format.
+# @arg $@ string Optional --print-envrc (direnv) or --force (dockerfile, devcontainer).
 # @exitcode 0 When the requested files are generated.
 # @exitcode 1 When the project or output is invalid.
 # @exitcode 2 When the format or arguments are invalid.
 pixied_generate() {
-    local format=${1:-} root definition definition_name lock_present
-    local pixied_cli_command print_envrc=0
-    local output dockerfile_content devcontainer_content direnv_content
-    [ "$#" -ge 1 ] ||
-        pixied_die "usage: pixied generate <direnv|devcontainer|dockerfile> [--print-envrc]" \
-            "$PIXIED_EXIT_USAGE"
+    local format=${1:-}
+    local force=0 print_envrc=0 arg
+    local usage
+    usage=$(pixied_generate_usage)
+    [ "$#" -ge 1 ] || pixied_die "$usage" "$PIXIED_EXIT_USAGE"
     case "$format" in
     direnv | devcontainer | dockerfile) ;;
-    *) pixied_die "unknown generate format: $format" "$PIXIED_EXIT_USAGE" ;;
+    *) pixied_die "$usage" "$PIXIED_EXIT_USAGE" ;;
     esac
     shift
-    if [ "$format" = direnv ] && [ "$#" -eq 1 ] && [ "$1" = --print-envrc ]; then
-        print_envrc=1
-    elif [ "$#" -ne 0 ]; then
-        pixied_die "usage: pixied generate <direnv|devcontainer|dockerfile> [--print-envrc]" \
-            "$PIXIED_EXIT_USAGE"
-    fi
+    for arg in "$@"; do
+        case "$arg" in
+        --force) force=1 ;;
+        --print-envrc)
+            [ "$format" = direnv ] || pixied_die "$usage" "$PIXIED_EXIT_USAGE"
+            print_envrc=1
+            ;;
+        *) pixied_die "$usage" "$PIXIED_EXIT_USAGE" ;;
+        esac
+    done
 
     if [ "$print_envrc" -eq 1 ]; then
         pixied_generate_direnv_print_envrc
         return 0
     fi
 
+    if [ "$format" = direnv ]; then
+        pixied_generate_direnv
+        return 0
+    fi
+
+    local root definition pixi_version
     root=$(pixied_generate_find_root "$(pixied_run pwd -P)")
     definition=$(pixied_generate_definition "$root")
     pixied_generate_validate_definition "$definition"
-    definition_name=${definition##*/}
-    lock_present=$(pixied_generate_lock_present "$root")
+    pixi_version=$(pixied_generate_resolve_pixi_version)
 
     case "$format" in
-    direnv)
-        output="$root/.envrc"
-        pixied_cli_command=$(pixied_generate_cli_command || true)
-        direnv_content=$(pixied_generate_direnv_content "$definition_name" "$pixied_cli_command")
-        pixied_generate_direnv_write "$output" "$direnv_content"
-        pixied_success "Generated $output"
-        ;;
-    devcontainer)
-        output="$root/.devcontainer"
-        if [ -e "$output" ] || [ -L "$output" ]; then
-            [ ! -L "$output" ] || pixied_die "DevContainer directory must not be a symlink: $output"
-            [ -d "$output" ] || pixied_die "DevContainer path is not a directory: $output"
-        fi
-        pixied_generate_require_new_path "$output/devcontainer.json"
-        pixied_generate_require_new_path "$output/Dockerfile"
-        dockerfile_content=$(pixied_generate_dockerfile_content \
-            "$lock_present" "$PIXIED_PIXI_VERSION_DEFAULT" 0)
-        devcontainer_content=$(pixied_generate_devcontainer_content "$lock_present")
-        pixied_generate_write_file "$output/Dockerfile" "$dockerfile_content"
-        pixied_generate_write_file "$output/devcontainer.json" "$devcontainer_content"
-        pixied_success "Generated $output/devcontainer.json and $output/Dockerfile"
-        ;;
-    dockerfile)
-        output="$root/Dockerfile"
-        dockerfile_content=$(pixied_generate_dockerfile_content \
-            "$lock_present" "$PIXIED_PIXI_VERSION_DEFAULT")
-        pixied_generate_write_file "$output" "$dockerfile_content"
-        pixied_success "Generated $output"
-        ;;
+    dockerfile) pixied_generate_dockerfile "$force" "$root" "$pixi_version" "$definition" ;;
+    devcontainer) pixied_generate_devcontainer "$force" "$root" "$pixi_version" ;;
     esac
+}
+
+# @description Generate the project .envrc by appending the activation block.
+# The direnv output always appends rather than overwriting, so no force flag is
+# needed for this format.
+#
+# @exitcode 0 When the .envrc is written.
+# @exitcode 1 When writing fails.
+pixied_generate_direnv() {
+    local root definition pixied_cli_command direnv_content output
+    root=$(pixied_generate_find_root "$(pixied_run pwd -P)")
+    definition=$(pixied_generate_definition "$root")
+    pixied_generate_validate_definition "$definition"
+    output="$root/.envrc"
+    pixied_cli_command=$(pixied_generate_cli_command || true)
+    direnv_content=$(pixied_generate_direnv_content "${definition##*/}" "$pixied_cli_command")
+    pixied_generate_direnv_write "$output" "$direnv_content"
+    pixied_success "Generated $output"
+}
+
+# @description Generate the CI Dockerfile.
+# The image is multi-stage and never copies the project source. Existing files
+# are refused unless --force backs them up first.
+#
+# @arg $1 integer Enable force mode (1) or not (0).
+# @arg $2 string The project root.
+# @arg $3 string The resolved Pixi version.
+# @arg $4 string The definition file path.
+# @exitcode 0 When the Dockerfile is generated.
+# @exitcode 1 When the project or output is invalid.
+pixied_generate_dockerfile() {
+    local force=$1 root=$2 pixi_version=$3 definition=$4
+    local target="$root/Dockerfile" content temp
+    local definition_name=${definition##*/}
+    if [ "$definition_name" != pixi.toml ] && [ ! -e "$root/pixi.toml" ]; then
+        pixied_die "pixied generate dockerfile requires a pixi.toml; pyproject.toml-only projects are not supported for CI images" \
+            "$PIXIED_EXIT_FAILURE"
+    fi
+    if [ "$force" -eq 0 ]; then
+        pixied_generate_require_new_path "$target"
+    fi
+    content=$(pixied_generate_dockerfile_content "$pixi_version")
+    temp=$(pixied_generate_make_temp "$target" "$content" 0644)
+    pixied_generate_commit_files "$force" "$target" "$temp"
+    pixied_success "Generated $target"
+}
+
+# @description Generate the Dev Container files.
+# Writes Dockerfile, devcontainer.json, entrypoint.sh, and .env into
+# .devcontainer. Existing files are refused unless --force backs them up first.
+#
+# @arg $1 integer Enable force mode (1) or not (0).
+# @arg $2 string The project root.
+# @arg $3 string The resolved Pixi version.
+# @exitcode 0 When all files are generated.
+# @exitcode 1 When the project or output is invalid.
+pixied_generate_devcontainer() {
+    local force=$1 root=$2 pixi_version=$3
+    local dir="$root/.devcontainer"
+    local dockerfile="$dir/Dockerfile" json="$dir/devcontainer.json"
+    local entry="$dir/entrypoint.sh" env="$dir/.env"
+    local host_uid host_gid content
+    local df_temp json_temp entry_temp env_temp
+    pixied_run mkdir -p -- "$dir"
+    if [ "$force" -eq 0 ]; then
+        pixied_generate_require_new_path "$dockerfile"
+        pixied_generate_require_new_path "$json"
+        pixied_generate_require_new_path "$entry"
+        pixied_generate_require_new_path "$env"
+    fi
+    host_uid=$(pixied_run id -u)
+    host_gid=$(pixied_run id -g)
+    content=$(pixied_generate_devcontainer_dockerfile_content "$pixi_version")
+    df_temp=$(pixied_generate_make_temp "$dockerfile" "$content" 0644)
+    content=$(pixied_generate_devcontainer_json_content)
+    json_temp=$(pixied_generate_make_temp "$json" "$content" 0644)
+    content=$(pixied_generate_entrypoint_content)
+    entry_temp=$(pixied_generate_make_temp "$entry" "$content" 0755)
+    content=$(pixied_generate_devcontainer_env_content "$host_uid" "$host_gid")
+    env_temp=$(pixied_generate_make_temp "$env" "$content" 0644)
+    pixied_generate_commit_files "$force" \
+        "$dockerfile" "$df_temp" \
+        "$json" "$json_temp" \
+        "$entry" "$entry_temp" \
+        "$env" "$env_temp"
+    pixied_success "Generated files in $dir:"
+    pixied_success "  ${dockerfile##*/}"
+    pixied_success "  ${json##*/}"
+    pixied_success "  ${entry##*/}"
+    pixied_success "  ${env##*/}"
 }

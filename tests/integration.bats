@@ -211,34 +211,94 @@ assert_semver() {
         pixied_test_fail "devcontainer.json was not generated"
     [ -f "$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile" ] ||
         pixied_test_fail "DevContainer Dockerfile was not generated"
-    grep -Fq -- 'COPY --exclude=.pixi . .' "$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile" ||
-        pixied_test_fail "DevContainer Dockerfile does not copy the project source"
-    grep -Fq -- "ARG PIXI_VERSION=$expected_pixi_version" \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile" ||
+    local dc_df copy_line run_line
+    dc_df="$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile"
+    grep -Fq -- 'COPY pixi.tom[l] pixi.loc[k] .devcontainer/.env ./' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not copy the project files or fallback .env"
+    grep -Fq -- 'COPY .devcontainer/.env .devcontainer/.env' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not copy the devcontainer .env"
+    grep -Fq -- "ARG PIXI_VERSION=$expected_pixi_version" "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not use the pinned Pixi version"
-    if grep -Fq -- 'RUN rm -rf -- .pixi && pixi install' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile"; then
-        pixied_test_fail "DevContainer Dockerfile duplicates post-create installation"
+    grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-plucky' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not use the plucky base image"
+    grep -Fq -- 'ENV PATH=${PIXI_HOME}/projects/bin:${PIXI_HOME}/bin:' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not preserve the project and global Pixi paths"
+    grep -Fq -- 'printf '\''detached-environments = "%s/projects"\n'\'' "$PIXI_HOME" > "$PIXI_HOME/config.toml"' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not configure the project detached Pixi environment"
+    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --locked' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not install with the configured Pixi home"
+    grep -Fq -- '*/envs/default' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not locate the default environment directory"
+    grep -Fq -- 'install -d -o "$CONTAINER_UID" -g "$CONTAINER_GID" -- "$environment_bin"' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not create an empty project bin directory"
+    grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not expose the project environment through the configured Pixi home"
+    copy_line=$(grep -n -- 'COPY .devcontainer/.env .devcontainer/.env' "$dc_df" | head -n1 | cut -d: -f1)
+    run_line=$(grep -n -- '. /workspace/.devcontainer/.env' "$dc_df" | head -n1 | cut -d: -f1)
+    [ -n "$copy_line" ] && [ -n "$run_line" ] && [ "$copy_line" -lt "$run_line" ] ||
+        pixied_test_fail "DevContainer Dockerfile sources the devcontainer .env before copying it"
+    grep -Fq -- '. /workspace/.devcontainer/.env' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not source the devcontainer .env"
+    if grep -Fq -- '. /workspace/.env' "$dc_df"; then
+        pixied_test_fail "DevContainer Dockerfile sources the wrong .env path"
     fi
-    grep -Fq -- 'postCreateCommand installs into that volume' \
+    grep -Fq -- 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' \
         "$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile" ||
-        pixied_test_fail "DevContainer Dockerfile does not explain volume installation"
-    grep -Fq -- '"type=volume,target=/workspace/.pixi"' \
+        pixied_test_fail "DevContainer Dockerfile does not install the ENTRYPOINT"
+    [ -x "$PIXIED_TEST_ROOT/project/.devcontainer/entrypoint.sh" ] ||
+        pixied_test_fail "DevContainer entrypoint was not generated as executable"
+    grep -Fq -- 'source "$ENV_FILE"' "$PIXIED_TEST_ROOT/project/.devcontainer/entrypoint.sh" ||
+        pixied_test_fail "DevContainer entrypoint does not source the .env file"
+    grep -Fq -- 'set -a' "$PIXIED_TEST_ROOT/project/.devcontainer/entrypoint.sh" ||
+        pixied_test_fail "DevContainer entrypoint does not export sourced .env variables"
+    grep -Fq -- 'CONTAINER_UID=' "$PIXIED_TEST_ROOT/project/.devcontainer/.env" ||
+        pixied_test_fail "DevContainer .env does not export the container UID"
+    grep -Fq -- 'ENV PIXI_HOME=/opt/pixi' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not define PIXI_HOME"
+    grep -Fq -- '"remoteUser": "app"' \
         "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
-        pixied_test_fail "DevContainer does not isolate the project environment"
+        pixied_test_fail "DevContainer does not select the app remote user"
+    if grep -Fq -- '"remoteEnv"' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
+        pixied_test_fail "DevContainer should not override the internal PIXI_HOME in remoteEnv"
+    fi
+    if grep -Fq -- '"type=volume,target=/workspace/.pixi"' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
+        pixied_test_fail "DevContainer must not mount .pixi as a volume"
+    fi
 
     run env HOME="$home" PIXI_HOME="$host_pixi_home" bash -c \
         'cd -- "$1" && bash "$2" generate dockerfile' bash "$project" "$cli"
     assert_success
     [ -f "$PIXIED_TEST_ROOT/project/Dockerfile" ] || pixied_test_fail "Dockerfile was not generated"
-    grep -Fq -- 'COPY --exclude=.pixi . .' "$PIXIED_TEST_ROOT/project/Dockerfile" ||
-        pixied_test_fail "Dockerfile does not copy the project source before install"
-    grep -Fq -- 'RUN rm -rf -- .pixi && pixi install --locked' \
+    grep -Fq -- 'COPY pixi.toml pixi.lock ./' "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile does not copy only the project manifest and lock"
+    grep -Fq -- 'printf '\''detached-environments = "%s/projects"\n'\'' "$PIXI_HOME" > "$PIXI_HOME/config.toml"' \
+        "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile does not configure the project detached Pixi environment"
+    grep -Fq -- '    pixi install --locked' \
         "$PIXIED_TEST_ROOT/project/Dockerfile" ||
         pixied_test_fail "Dockerfile does not install from the lock file"
+    grep -Fq -- 'COPY --from=builder ${PIXI_HOME} ${PIXI_HOME}' \
+        "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile does not copy the detached Pixi environment"
+    grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' \
+        "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile does not expose the Pixi environment through the configured Pixi home"
+    grep -Fq -- 'ENV PATH=${PIXI_HOME}/projects/bin:${PIXI_HOME}/bin:' \
+        "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile does not preserve both project and global Pixi paths"
     grep -Fq -- "ARG PIXI_VERSION=$expected_pixi_version" \
         "$PIXIED_TEST_ROOT/project/Dockerfile" ||
         pixied_test_fail "Dockerfile does not use the pinned Pixi version"
+    grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-trixie AS builder' \
+        "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile builder stage does not use the trixie base image"
+    grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-trixie-slim AS runner' \
+        "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile runner stage does not use the trixie-slim base image"
+    grep -Fq -- 'USER ${APP_UID}:${APP_GID}' "$PIXIED_TEST_ROOT/project/Dockerfile" ||
+        pixied_test_fail "Dockerfile does not run as the configured app UID/GID"
     if grep -Fq -- "$host_pixi_home" "$PIXIED_TEST_ROOT/project"/.envrc \
         "$PIXIED_TEST_ROOT/project"/Dockerfile \
         "$PIXIED_TEST_ROOT/project"/.devcontainer/Dockerfile; then
@@ -267,11 +327,11 @@ assert_semver() {
     assert_output --partial 'could not find a Pixi project root'
 }
 
-@test "project integration generation validates Pixi pyproject definitions" {
+@test "project integration generation validates Pixi definitions" {
     local cli="$PIXIED_REPO_ROOT/bin/pixied"
-    local home="$PIXIED_TEST_ROOT/pyproject-home"
-    local valid_project="$PIXIED_TEST_ROOT/pyproject-valid"
-    local invalid_project="$PIXIED_TEST_ROOT/pyproject-invalid"
+    local home="$PIXIED_TEST_ROOT/def-home"
+    local valid_project="$PIXIED_TEST_ROOT/def-valid"
+    local invalid_project="$PIXIED_TEST_ROOT/def-invalid"
     mkdir -p "$home" "$valid_project" "$invalid_project"
     cat >"$valid_project/pyproject.toml" <<'PYPROJECT'
 [project]
@@ -287,15 +347,176 @@ version = "0.1.0"
 PYPROJECT
 
     run env HOME="$home" bash -c \
-        'cd -- "$1" && bash "$2" generate dockerfile' bash "$valid_project" "$cli"
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$valid_project" "$cli"
     assert_success
-    grep -Fq -- 'COPY --exclude=.pixi . .' "$valid_project/Dockerfile" ||
-        pixied_test_fail "Dockerfile does not copy the project source"
+    [ -f "$valid_project/.devcontainer/Dockerfile" ] ||
+        pixied_test_fail "DevContainer Dockerfile was not generated for a pyproject workspace"
 
     run env HOME="$home" bash -c \
-        'cd -- "$1" && bash "$2" generate dockerfile' bash "$invalid_project" "$cli"
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$invalid_project" "$cli"
     assert_failure 1
     assert_output --partial 'has no supported Pixi section'
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate dockerfile' bash "$valid_project" "$cli"
+    assert_failure 1
+    assert_output --partial 'requires a pixi.toml'
+}
+
+@test "generate dockerfile refuses to overwrite and backs up with --force" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local home="$PIXIED_TEST_ROOT/dockerfile-overwrite-home"
+    local project="$PIXIED_TEST_ROOT/dockerfile-overwrite-project"
+    mkdir -p "$home" "$project"
+    printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate dockerfile' bash "$project" "$cli"
+    assert_success
+    [ -f "$project/Dockerfile" ] || pixied_test_fail "Dockerfile was not generated"
+    printf 'do not touch\n' >"$project/Dockerfile"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate dockerfile' bash "$project" "$cli"
+    assert_failure 1
+    assert_output --partial 'refusing to overwrite existing generated file'
+    grep -Fq -- 'do not touch' "$project/Dockerfile" ||
+        pixied_test_fail "refused generation modified the existing Dockerfile"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate dockerfile --force' bash "$project" "$cli"
+    assert_success
+    [ -f "$project/Dockerfile.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup"
+    grep -Fq -- 'do not touch' "$project/Dockerfile.bak" ||
+        pixied_test_fail "--force backup does not contain the previous Dockerfile"
+
+    printf 'second change\n' >"$project/Dockerfile"
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate dockerfile --force' bash "$project" "$cli"
+    assert_success
+    grep -Fq -- 'second change' "$project/Dockerfile.bak" ||
+        pixied_test_fail "--force did not overwrite the previous .bak backup"
+}
+
+@test "generate devcontainer refuses to overwrite and backs up with --force" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local home="$PIXIED_TEST_ROOT/devcontainer-overwrite-home"
+    local project="$PIXIED_TEST_ROOT/devcontainer-overwrite-project"
+    mkdir -p "$home" "$project"
+    printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_success
+    [ -f "$project/.devcontainer/Dockerfile" ] ||
+        pixied_test_fail "DevContainer was not generated"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_failure 1
+    assert_output --partial 'refusing to overwrite existing generated file'
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer --force' bash "$project" "$cli"
+    assert_success
+    [ -f "$project/.devcontainer/Dockerfile.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for the DevContainer Dockerfile"
+    [ -f "$project/.devcontainer/devcontainer.json.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for the devcontainer.json"
+    [ -f "$project/.devcontainer/entrypoint.sh.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for the entrypoint"
+    [ -f "$project/.devcontainer/.env.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for the .env"
+}
+
+@test "generate devcontainer embeds build-arg driven image and id validation" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local home="$PIXIED_TEST_ROOT/buildarg-home"
+    local project="$PIXIED_TEST_ROOT/buildarg-project"
+    mkdir -p "$home" "$project"
+    printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_success
+    local df="$project/.devcontainer/Dockerfile"
+    grep -Fq -- 'ARG PIXI_VERSION=' "$df" ||
+        pixied_test_fail "DevContainer Dockerfile does not declare the PIXI_VERSION build-arg"
+    grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-plucky' "$df" ||
+        pixied_test_fail "DevContainer Dockerfile FROM is not driven by the PIXI_VERSION build-arg"
+    grep -Fq -- 'validate_id' "$df" ||
+        pixied_test_fail "DevContainer Dockerfile build RUN does not validate the container UID/GID"
+    grep -Fq -- 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' "$df" ||
+        pixied_test_fail "DevContainer Dockerfile does not install the ENTRYPOINT"
+}
+
+@test "generate entrypoint is GID-aware and validates ids" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local home="$PIXIED_TEST_ROOT/entrypoint-home"
+    local project="$PIXIED_TEST_ROOT/entrypoint-project"
+    mkdir -p "$home" "$project"
+    printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_success
+    local entry="$project/.devcontainer/entrypoint.sh"
+    grep -Fq -- 'stat -c %g' "$entry" ||
+        pixied_test_fail "entrypoint does not read the group owner"
+    grep -Fq -- '[ "$group" = "$CONTAINER_GID" ]' "$entry" ||
+        pixied_test_fail "entrypoint does not chown when the group owner differs"
+    grep -Fq -- 'validate_id' "$entry" ||
+        pixied_test_fail "entrypoint does not validate the container UID/GID"
+    grep -Fq -- 'is missing' "$entry" ||
+        pixied_test_fail "entrypoint does not report a missing .env file"
+}
+
+@test "generate rejects invalid Pixi versions" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local home="$PIXIED_TEST_ROOT/badver-home"
+    local project="$PIXIED_TEST_ROOT/badver-project"
+    local latest_project="$PIXIED_TEST_ROOT/badver-project-latest"
+    mkdir -p "$home" "$project" "$latest_project"
+    printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
+    printf '[workspace]\nname = "sample"\n' >"$latest_project/pixi.toml"
+
+    run env HOME="$home" PIXIED_PIXI_VERSION=1.2.3x bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_failure 1
+    assert_output --partial 'unsupported Pixi version'
+
+    run env HOME="$home" PIXIED_PIXI_VERSION=1.2 bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_failure 1
+    assert_output --partial 'unsupported Pixi version'
+
+    run env HOME="$home" PIXIED_PIXI_VERSION=v1.2.3 bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    assert_success
+    grep -Fq -- 'ARG PIXI_VERSION=1.2.3' "$project/.devcontainer/Dockerfile" ||
+        pixied_test_fail "generate did not strip the leading v from the version"
+
+    run env HOME="$home" PIXIED_PIXI_VERSION=latest bash -c \
+        'cd -- "$1" && bash "$2" generate devcontainer' bash "$latest_project" "$cli"
+    assert_success
+    grep -Fq -- 'ARG PIXI_VERSION=latest' "$latest_project/.devcontainer/Dockerfile" ||
+        pixied_test_fail "generate did not accept the latest marker"
+    grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:plucky' "$latest_project/.devcontainer/Dockerfile" ||
+        pixied_test_fail "generate did not use the bare plucky tag for latest"
+}
+
+@test "generate rejects unknown arguments" {
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local home="$PIXIED_TEST_ROOT/unknown-args-home"
+    local project="$PIXIED_TEST_ROOT/unknown-args-project"
+    mkdir -p "$home" "$project"
+    printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
+
+    run env HOME="$home" bash -c \
+        'cd -- "$1" && bash "$2" generate dockerfile --bogus' bash "$project" "$cli"
+    assert_failure 2
+    assert_output --partial 'usage: pixied generate'
 }
 
 @test "generated project shell hook keeps Pixi variables isolated" {

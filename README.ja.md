@@ -24,11 +24,11 @@ Pixi, direnv, Zellijを組み合わせ、I/O負荷の高いネットワークホ
 ## 主要機能
 
 - グローバルの開発runtimeを構築
-  - SSHで接続する非特権ユーザー＆NFS共有ホームディレクトリでも環境を構築可能
-  - 自動的にruntimeに入り、同じmachineに残ったZellij sessionを復元
+  + SSHで接続する非特権ユーザー＆NFS共有ホームディレクトリでも環境を構築可能
+  + 自動的にruntimeに入り、同じmachineに残ったZellij sessionを復元
 - プロジェクトごとのPixi環境を構築
-  - グローバルPixi環境の上にプロジェクトPixi環境を重ねて利用可能
-  - DevContainerまたはDocker用の定義を生成可能
+  + グローバルPixi環境の上にプロジェクトPixi環境を重ねて利用可能
+  + DevContainerまたはDocker用の定義を生成可能
 
 ## クリックスタート
 
@@ -106,7 +106,7 @@ pixied help                  ヘルプ表示
 pixied version               バージョン表示
 ```
 
-プロジェクトrootで次を実行すると、グローバルPixiEden環境を土台にプロジェクトPixi環境を使うためのファイルを生成できます。生成先に既存ファイルがある場合は、明示確認なしに上書きしません。
+プロジェクトrootで次を実行すると、グローバルPixiEden環境を土台にプロジェクトPixi環境を使うためのファイルを生成できます。
 
 ```bash
 pixied generate direnv
@@ -114,7 +114,7 @@ pixied generate devcontainer
 pixied generate dockerfile
 ```
 
-`direnv`の生成物はプロジェクトディレクトリに入ったときだけプロジェクトPixi環境を有効化します。DevContainerとDockerfileの生成物は、プロジェクトの`pixi.toml`または`pyproject.toml`を基にコンテナ内へプロジェクトPixi環境を構築します。
+`direnv`の生成物はプロジェクトディレクトリに入ったときだけプロジェクトPixi環境を有効化します。DevContainerとDockerfileの生成物は、プロジェクトの`pixi.toml`を基にコンテナ内へプロジェクトPixi開発環境を構築します（ボリュームマウント前提）。
 
 ## 再現される範囲
 

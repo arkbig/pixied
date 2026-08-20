@@ -52,7 +52,7 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 - NFS modeの同期対象が8つのshell設定ファイルに限定され、起動前pullと正常終了後pushが行われる。
 - Zellijを選択した場合、`pixied shell`で既存セッションへ再接続するか、初回セッションを作成できる。
 - `pixied generate direnv`で、プロジェクトディレクトリに入ったときだけPixiEdenの専用Pixi上のプロジェクト環境を有効化できる。生成された`.envrc`は`pixied generate direnv --print-envrc`を評価し、runtime hookまたは`pixied shell`/`pixied run`のPATHを使い、それ以外では生成時のCLI絶対pathを使う。hookの評価だけではNFS同期やsession起動を行わない。
-- `pixied generate devcontainer`または`dockerfile`で、同じプロジェクトPixi環境をコンテナ内に構築できる。
+- `pixied generate devcontainer`または`dockerfile`で、同じプロジェクトPixi環境をコンテナ内に構築できる。既定では`generate devcontainer`/`generate dockerfile`は既存ファイルを上書きせずエラーで終了し、`--force`で上書き（`<name>.bak`へ1世代backup）する。また`generate dockerfile`は`pixi.toml`を必須とし、pyproject.tomlのみは非対応とする。
 - `pixied uninstall`を再実行しても、PixiEdenが所有しない資源や利用者の既存環境を削除しない。
 
 ## 再現範囲

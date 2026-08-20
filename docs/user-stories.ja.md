@@ -198,10 +198,10 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
    **Then**プロジェクトのPixi環境が有効になり、プロジェクト外では有効にならない。
 3. **Given**Pixiプロジェクトがある
    **When**`pixied generate devcontainer`または`pixied generate dockerfile`を実行する
-   **Then**プロジェクトの`pixi.toml`または`pyproject.toml`を利用する再現可能なコンテナ定義を生成できる。
+   **Then**プロジェクト定義から再現可能なコンテナ定義を生成できる。`generate devcontainer`は`pixi.toml`または`pyproject.toml`のいずれでも動作し、`generate dockerfile`は`pixi.toml`を必須とする（pyproject.tomlのみは非対応）。
 4. **Given**対象の生成ファイルが既に存在する
    **When**`pixied generate`を実行する
-   **Then**明示確認なしに上書きせず、既存内容との差分または再生成方法を示す。
+   **Then**`generate devcontainer`/`generate dockerfile`は既定で上書きせずエラーで終了し、`--force`で上書き（直前のファイルを`<name>.bak`へ1世代backup）する。`generate direnv`は既存`.envrc`へ重複なくブロックを挿入し、`--force`を無視する。
 5. **Given**生成されたコンテナ定義を利用する
    **When**DevContainerまたはDockerでプロジェクトを起動する
    **Then**グローバルPixiの前提とプロジェクトPixiの依存関係が分離され、ホストのPixi環境を変更しない。
