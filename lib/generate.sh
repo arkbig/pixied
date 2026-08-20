@@ -753,35 +753,9 @@ pixied_generate() {
     pixi_version=$(pixied_generate_resolve_pixi_version)
 
     case "$format" in
-    direnv)
-        output="$root/.envrc"
-        pixied_cli_command=$(pixied_generate_cli_command || true)
-        direnv_content=$(pixied_generate_direnv_content "$definition_name" "$pixied_cli_command")
-        pixied_generate_write_file "$output" "$direnv_content"
-        pixied_success "Generated $output"
-        ;;
-    devcontainer)
-        output="$root/.devcontainer"
-        if [ -e "$output" ] || [ -L "$output" ]; then
-            [ ! -L "$output" ] || pixied_die "DevContainer directory must not be a symlink: $output"
-            [ -d "$output" ] || pixied_die "DevContainer path is not a directory: $output"
-        fi
-        pixied_generate_require_new_path "$output/devcontainer.json"
-        pixied_generate_require_new_path "$output/Dockerfile"
-        dockerfile_content=$(pixied_generate_dockerfile_content \
-            "$lock_present" "$PIXIED_PIXI_VERSION_DEFAULT" 0)
-        devcontainer_content=$(pixied_generate_devcontainer_content "$lock_present")
-        pixied_generate_write_file "$output/Dockerfile" "$dockerfile_content"
-        pixied_generate_write_file "$output/devcontainer.json" "$devcontainer_content"
-        pixied_success "Generated $output/devcontainer.json and $output/Dockerfile"
-        ;;
-    dockerfile)
-        output="$root/Dockerfile"
-        dockerfile_content=$(pixied_generate_dockerfile_content \
-            "$lock_present" "$PIXIED_PIXI_VERSION_DEFAULT")
-        pixied_generate_write_file "$output" "$dockerfile_content"
-        pixied_success "Generated $output"
-        ;;
+    direnv) pixied_generate_direnv "$root" "$definition" ;;
+    devcontainer) pixied_generate_devcontainer "$force" "$root" "$pixi_version" ;;
+    dockerfile) pixied_generate_dockerfile "$force" "$root" "$pixi_version" "$definition" ;;
     esac
 }
 
