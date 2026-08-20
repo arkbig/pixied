@@ -111,10 +111,12 @@ scripts/package-release.sh /tmp/pixied.tar.gz
 
 オンラインインストールの入口である[install.sh](../install.sh)は、GitHub Releasesの`latest`にある`pixied.tar.gz`を取得する。Release assetは、バージョンタグをpushしたときに[release workflow](../.github/workflows/release.yml)が自動生成・公開する。
 
-Releaseを作成する前に、作業ツリーの変更をcommitし、対象commitをReleaseに含める。次のコマンドで統合テストとarchive作成を確認する。
+Releaseを作成する前に、作業ツリーの変更をcommitし、対象commitをReleaseに含める。次のコマンドで通常の統合テストとarchive作成を確認する。生成DockerテストはDockerが必要なため、必要なときだけ`generate`、または全suiteを確認するときに`all`を指定する。
 
 ```bash
 tests/run.sh
+tests/run.sh generate
+tests/run.sh all
 scripts/package-release.sh
 tar -tzf dist/pixied.tar.gz
 ```

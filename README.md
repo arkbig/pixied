@@ -26,11 +26,11 @@ It targets two types of environments:
 ## Key Features
 
 - Build a global development runtime
-  - Build an environment for an unprivileged user connecting over SSH with an NFS-shared home directory
-  - Automatically enter the runtime and restore a Zellij session that remains on the same machine
+  + Build an environment for an unprivileged user connecting over SSH with an NFS-shared home directory
+  + Automatically enter the runtime and restore a Zellij session that remains on the same machine
 - Build a project-specific Pixi environment
-  - Layer a project Pixi environment on top of the global Pixi environment
-  - Generate definitions for DevContainer or Docker
+  + Layer a project Pixi environment on top of the global Pixi environment
+  + Generate definitions for DevContainer or Docker
 
 ## Quick Start
 
@@ -108,7 +108,7 @@ pixied help                    Show help
 pixied version                 Show the version
 ```
 
-Run the following from a project root to generate files for using a project Pixi environment on top of the global PixiEden environment. Existing files in the destination are not overwritten without explicit confirmation.
+Run the following from a project root to generate files for using a project Pixi environment on top of the global PixiEden environment:
 
 ```bash
 pixied generate direnv
@@ -116,7 +116,7 @@ pixied generate devcontainer
 pixied generate dockerfile
 ```
 
-The `direnv` output enables the project Pixi environment only after entering the project directory. The DevContainer and Dockerfile outputs build a project Pixi environment inside the container based on the project's `pixi.toml` or `pyproject.toml`.
+The `direnv` output enables the project Pixi environment only after entering the project directory. The DevContainer and Dockerfile outputs build a project Pixi environment inside the container based on the project's `pixi.toml` (assuming a volume mount).
 
 ## What Is Reproduced
 

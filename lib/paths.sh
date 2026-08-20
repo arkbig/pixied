@@ -300,3 +300,17 @@ pixied_resolve_paths() {
     PIXIED_PIXI_HOME=$(pixied_validate_canonical_path "$PIXIED_PIXI_HOME")
     export PIXIED_PIXI_HOME
 }
+
+# @description Ensure the local runtime home's ~/.local/bin directory exists.
+# In NFS home mode the runtime HOME is the machine-local home, so its own
+# ~/.local/bin must exist for the shell/hook environment and so a user's
+# ~/.profile (which typically prepends $HOME/.local/bin to PATH) can seed
+# locally installed binaries. This is a no-op in local home mode, where the
+# local home and account home coincide.
+#
+# @exitcode 0 Always; the directory is created only in NFS mode.
+pixied_ensure_local_home_bin() {
+    [ "${PIXIED_HOME_MODE:-local}" = nfs ] || return 0
+    pixied_have_cmd mkdir || pixied_die "required command not found: mkdir"
+    pixied_run mkdir -p -- "$PIXIED_LOCAL_HOME/.local/bin"
+}

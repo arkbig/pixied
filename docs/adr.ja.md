@@ -139,7 +139,7 @@ current machineのstate、canonical path、owner、hashを検証し、PixiEden�
 
 ### Decision
 
-`pixied generate <devcontainer|dockerfile|direnv>`と`pixied generate direnv --print-envrc`を提供する。`direnv`は、runtime hookまたは`pixied shell`/`pixied run`で`pixied`がPATH上にある場合はそのcommandを、それ以外では生成時のCLI絶対pathを使って専用Pixi runtimeからプロジェクトのshell hookを取得する。`--print-envrc`はactivation codeだけをstdoutへ出力し、ファイルは書き込まない。同期やsession起動は行わず、コンテナ向け形式はホストの`.pixi`を除外してプロジェクト全体を取り込んでからinstallし、プロジェクト定義から再現可能なコンテナ定義を生成する。既存ファイルは明示確認なしに上書きしない。
+`pixied generate <devcontainer|dockerfile|direnv>`と`pixied generate direnv --print-envrc`を提供する。`direnv`は、runtime hookまたは`pixied shell`/`pixied run`で`pixied`がPATH上にある場合はそのcommandを、それ以外では生成時のCLI絶対pathを使って専用Pixi runtimeからプロジェクトのshell hookを取得する。コンテナ向け形式はホストの`.pixi`を除外してプロジェクト全体を取り込んでからinstallし、プロジェクト定義から再現可能なコンテナ定義を生成する。`generate dockerfile`は`pixi.toml`を必須とし、pyproject.tomlのみのプロジェクトはCI用イメージに対応しない。既存の`.envrc`がある場合は末尾に挿入（生成済みブロックは重複なく置換）し、それ以外の形式は既定で上書きせずエラーで終了する。`--force`を指定すると上書きし、直前のファイルを`<name>.bak`へ1世代backupする。`--print-envrc`はactivation codeだけをstdoutへ出力し、ファイルは書き込まない。同期やsession起動は行わない。
 
 ### Rejected alternatives
 

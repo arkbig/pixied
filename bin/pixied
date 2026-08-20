@@ -260,6 +260,7 @@ pixied_install() {
 
     pixied_step "Preparing the dedicated Pixi environment for $PIXIED_MACHINE_ID"
     pixied_run mkdir -p -- "$PIXIED_STATE_DIR" "$PIXIED_MACHINE_STATE_DIR" "$PIXIED_CONFIG_DIR"
+    pixied_ensure_local_home_bin
     pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
     if [ "$state_exists" -eq 1 ]; then
         pixied_state_load "$PIXIED_STATE_FILE"
@@ -332,23 +333,34 @@ pixied_install() {
 
 # @description Print the shell setup steps required after installation.
 # The installer does not modify the user's shell configuration automatically.
+# Option A recommends the bare command when the launcher is already on PATH and
+# otherwise falls back to the absolute launcher path. Option B always references
+# the deployed CLI body directly, keeping the generated hook self-contained and
+# independent of whether ~/.local/bin is on PATH.
 #
 # @stderr The next-step instructions for starting or automatically enabling PixiEden
 pixied_print_next_steps() {
-    local launcher launcher_literal
+    local launcher launcher_literal body body_literal start_cmd
     launcher="$PIXIED_COMMAND_BIN/pixied"
     printf -v launcher_literal '%q' "$launcher"
+    body="$PIXIED_DATA_DIR/bin/pixied"
+    printf -v body_literal '%q' "$body"
+    if command -v pixied >/dev/null 2>&1; then
+        start_cmd="pixied"
+    else
+        start_cmd="$launcher_literal"
+    fi
     cat >&2 <<EOF
 [pixied] NEXT Start PixiEden now or enable it automatically:
 
 Option A (Start now):
   Run this command:
-    $launcher_literal shell
+    $start_cmd shell
 
 Option B (Automatic - Recommended):
   Add to ~/.bashrc, then restart your terminal:
-    if command -v $launcher_literal >/dev/null 2>&1; then
-        eval "\$($launcher_literal hook bash)"
+    if [ -x $body_literal ]; then
+        eval "\$($body_literal hook bash)"
     fi
   For zsh, add the equivalent block to ~/.zshrc and use hook zsh.
 EOF
