@@ -29,12 +29,43 @@ mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
 
 filtered_args=()
 verbose=0
-for arg in "$@"; do
-    if [ "$arg" = --verbose ]; then
+test_suite=integration
+suite_selected=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --verbose)
         verbose=1
-    else
-        filtered_args+=("$arg")
-    fi
+        ;;
+    all)
+        if [ "$suite_selected" -eq 1 ]; then
+            printf 'ERROR: choose either generate or all, not both.\n' >&2
+            exit 2
+        fi
+        test_suite=all
+        suite_selected=1
+        ;;
+    generate)
+        if [ "$suite_selected" -eq 1 ]; then
+            printf 'ERROR: choose either generate or all, not both.\n' >&2
+            exit 2
+        fi
+        test_suite=generate
+        suite_selected=1
+        ;;
+    --filter)
+        filtered_args+=("$1")
+        shift
+        if [ "$#" -eq 0 ]; then
+            printf 'ERROR: --filter requires a value.\n' >&2
+            exit 2
+        fi
+        filtered_args+=("$1")
+        ;;
+    *)
+        filtered_args+=("$1")
+        ;;
+    esac
+    shift
 done
 
 bats_args=(--print-output-on-failure)
@@ -51,4 +82,19 @@ if [ -n "${PIXIED_TEST_OUTPUT_DIR:-}" ]; then
     bats_args+=(--gather-test-outputs-in "$test_output_dir")
 fi
 
-exec bats "${bats_args[@]}" "${filtered_args[@]}" "$PIXIED_ROOT/tests/integration.bats"
+case "$test_suite" in
+integration)
+    test_files=("$PIXIED_ROOT/tests/integration.bats")
+    ;;
+generate)
+    test_files=("$PIXIED_ROOT/tests/generate-docker.bats")
+    ;;
+all)
+    test_files=(
+        "$PIXIED_ROOT/tests/integration.bats"
+        "$PIXIED_ROOT/tests/generate-docker.bats"
+    )
+    ;;
+esac
+
+exec bats "${bats_args[@]}" "${filtered_args[@]}" "${test_files[@]}"

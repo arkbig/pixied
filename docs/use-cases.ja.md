@@ -114,5 +114,5 @@ NFSホームで開発する。
 
 1. 利用者がPixiプロジェクトのrootで生成形式を指定する。
 2. PixiEdenがプロジェクト定義を検証し、既存ファイルの状態を確認する。
-3. `direnv`、DevContainer、Dockerのいずれかに対応する生成物を、確認済みのpathへatomicに書き込む。
+3. `direnv`は既存`.envrc`へ重複なくブロックを挿入する。`devcontainer`/`dockerfile`は既定で既存ファイルを上書きせずエラーで終了し、`--force`指定時に上書きして直前のファイルを`<name>.bak`へ1世代backupする。
 4. 生成物はPixiEdenの専用Pixi runtimeを土台にし、プロジェクト外やホストの既存Pixi環境へ影響を与えない。生成`.envrc`は`pixied generate direnv --print-envrc`形式で評価し、`pixied`がPATHにない生成時はCLIの絶対pathを使う。`--print-envrc`はファイルを書き込まない。生成`.envrc`の評価だけではNFS同期やsession起動を行わない。
