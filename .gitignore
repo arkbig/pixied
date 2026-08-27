@@ -2,6 +2,6 @@
 /dist/
 
 # temporary files for AI
-/plan.md
-/tasks.md
-/review.md
+/_plan.md
+/_tasks.md
+/_review.md

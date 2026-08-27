@@ -149,6 +149,13 @@ rmdir -- "$PIXIED_STATE_DIR/.lock"
 
 Do not delete the lock while a process is running, and do not run `rm -rf` on the lock.
 
+A detached Zellij session is still active and blocks uninstallation even when it does not hold the lock. Check for it and end the managed session before retrying:
+
+```bash
+zellij list-sessions --no-formatting
+zellij delete-session pixied
+```
+
 ## Requirements
 
 - Ubuntu or a compatible `Linux` environment with `bash`, `curl` or `wget`, and `tar` available.
@@ -164,9 +171,44 @@ pixied uninstall
 
 Uninstallation uses the dedicated `PIXI_HOME` recorded in the current state as its management boundary. A dedicated `PIXI_HOME` newly created by PixiEden and not shared with other machines can be cleaned up directory-wide after validating its path, owner, and state. For an existing path or a path shared with another machine, PixiEden cleans up only executables whose recorded hashes match the state, so shared Pixi metadata, manifests, `envs/`, and other files may remain. PixiEden does not determine ownership at the package level and does not guarantee removal of only the Global packages added by the current installation.
 
-If the target managed Zellij session remains, uninstallation stops. End or detach the session and rerun `pixied uninstall`. If the session list cannot be retrieved, uninstallation also stops as a precaution.
+If the target managed Zellij session remains, uninstallation stops. Verify it with the Zellij command shown in the error, then end it with `zellij delete-session pixied` and rerun `pixied uninstall`. Detaching alone leaves the session running and does not allow uninstallation. If the session list cannot be retrieved, uninstallation also stops as a precaution.
 
 Finally, manually remove the PixiEden hook block from the shell configuration file where it was added, such as `~/.bashrc` or `~/.zshrc`. If the process is interrupted, rerun `pixied uninstall` as long as the launcher or deployed CLI remains available.
+
+## Operating from an Active Runtime
+
+You can run `pixied install` or `pixied uninstall` from inside a shell where the dedicated environment is active (an active runtime). Here the **verified state file** is the source of truth for identity. Identity is never recomputed from `$HOME`, `PIXIED_STATE_FILE`, or `PIXIED_MACHINE_STATE_DIR`.
+
+An active runtime is detected only when both `PIXIED_RUNTIME_HOOK_ACTIVE=1` and `PIXIED_RUNTIME_STATE_FILE` (an absolute canonical path of the form `<state_dir>/machines/<machine_id>/state`) are present. If the state file is missing or unverifiable, install and uninstall fail with:
+
+```text
+active runtime state is missing or unverifiable; PixiEden refuses to change identity from an active runtime; re-source the runtime from a valid deployment
+```
+
+From an active runtime the following identities cannot be changed. Passing any of `--home-mode`, `--local-home`, `--machine-id`, `--session-manager`, or `--pixi-home` is rejected:
+
+```text
+active runtime rejects identity-changing option: --<option> '<given>' (verified state uses '<verified>')
+```
+
+Trying to change the session manager during reinstall is rejected with:
+
+```text
+cannot change session manager during reinstall; run uninstall first
+```
+
+Install and uninstall update the state without changing the environment held by the current session. After you `exit` the runtime shell, restart or re-attach the runtime to pick up the new configuration.
+
+```bash
+exit            # leave the active runtime shell
+# restart or re-attach the runtime to re-evaluate the dedicated environment
+```
+
+You cannot uninstall from an active `zellij` runtime because the managed Zellij session is still attached. Detach the session (or `exit` the runtime shell) and rerun the uninstall:
+
+```text
+cannot uninstall from an active Zellij runtime; detach the managed Zellij session (exit the runtime shell) and rerun the uninstall
+```
 
 ## Paths and XDG Support
 

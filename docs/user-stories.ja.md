@@ -205,3 +205,36 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 5. **Given**生成されたコンテナ定義を利用する
    **When**DevContainerまたはDockerでプロジェクトを起動する
    **Then**グローバルPixiの前提とプロジェクトPixiの依存関係が分離され、ホストのPixi環境を変更しない。
+
+## US-109
+
+### アクティブruntime内から設定を変えずに管理する
+
+### User Story
+
+運用者として、専用環境を有効化したruntime shellの中から再インストールやアンインストールを実行するとき、検証済みstateに記録されたidentityをそのまま引き継ぎ、誤って別machineや別homeの設定を当てがわれる事故を避けたい。
+
+**関連UC**: [UC-07](use-cases.ja.md#uc-07)、[UC-09](use-cases.ja.md#uc-09)、[UC-10](use-cases.ja.md#uc-10)
+
+**関連ADR**: [ADR-009](adr.ja.md#adr-009)
+
+### Acceptance Criteria
+
+1. **Given**検証済みstate fileをsourceしたアクティブruntime shellがある
+   **When**その中から`pixied install`または`pixied uninstall`を実行する
+   **Then**`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からidentityを再計算せず、検証済みstate fileをsource of truthとして扱う。
+2. **Given**`PIXIED_RUNTIME_HOOK_ACTIVE`だけ、または`PIXIED_RUNTIME_STATE_FILE`だけが設定されたshellがある
+   **When**その中から管理操作を実行する
+   **Then**アクティブruntimeとして検出せず、state fileをsource of truthとは扱わない。
+3. **Given**アクティブruntime shellがある
+   **When**`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`のいずれかを指定する
+   **Then**`active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')`を出力して却下する。
+4. **Given**既存stateがあるアクティブruntime shellがある
+   **When**reinstallでsession managerを変更しようとする
+   **Then**`cannot change session manager during reinstall; run uninstall first`を出力して却下する。
+5. **Given**`zellij`のアクティブruntime shellがある
+   **When**`pixied uninstall`を実行する
+   **Then**`cannot uninstall from an active Zellij runtime; detach the managed Zellij session (exit the runtime shell) and rerun the uninstall`を出力して却下する。
+6. **Given**アクティブruntime shellでinstall/uninstallを実行した
+   **When**stateが更新されたあと`exit`でruntime shellを抜け、runtimeを再起動または再attachする
+   **Then**現在のsessionが保持していた環境は変えず、再評価したruntimeにのみ新しい設定が反映される。

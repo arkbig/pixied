@@ -131,6 +131,16 @@ pixied_options_parse() {
         --machine-id=*)
             pixied_options_parse --machine-id "${option#*=}"
             ;;
+        --pixi-home)
+            [ "$#" -ge 2 ] || pixied_die "missing value for --pixi-home" "$PIXIED_EXIT_USAGE"
+            pixied_require_absolute_path "$2"
+            export PIXIED_PIXI_HOME=$2
+            PIXIED_OPTION_CLI_SET[pixi_home]=1
+            shift
+            ;;
+        --pixi-home=*)
+            pixied_options_parse --pixi-home "${option#*=}"
+            ;;
         --*) pixied_die "unknown install option: $option" "$PIXIED_EXIT_USAGE" ;;
         *) pixied_die "unexpected install argument: $option" "$PIXIED_EXIT_USAGE" ;;
         esac
@@ -365,6 +375,49 @@ pixied_options_validate_state_transition() {
         [ "${PIXIED_STATE[session_manager]}" != "$PIXIED_SESSION_MANAGER" ]; then
         pixied_die "cannot change session manager during reinstall; run uninstall first"
     fi
+}
+
+# @description Reject active-runtime install options that change the verified identity.
+# Only acts within an active runtime where the verified state is the source of
+# truth. For each explicitly supplied option (home mode, local home, session
+# manager, machine id, pixi home), the requested value must equal the verified
+# state value; re-specifying the same value is allowed, but a different value is
+# rejected so the runtime cannot silently change identity from within.
+#
+# @exitcode 0 Non-active, or every explicit option matches the verified state.
+# @exitcode 1 An explicit option conflicts with the verified active state.
+pixied_install_assert_active_identity() {
+    [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ] || return 0
+    local option current state_value var_name option_name
+    for option in home_mode local_home session_manager machine_id pixi_home; do
+        pixied_options_is_explicit "$option" || continue
+        case "$option" in
+        home_mode)
+            var_name=PIXIED_HOME_MODE
+            option_name=--home-mode
+            ;;
+        local_home)
+            var_name=PIXIED_LOCAL_HOME
+            option_name=--local-home
+            ;;
+        session_manager)
+            var_name=PIXIED_SESSION_MANAGER
+            option_name=--session-manager
+            ;;
+        machine_id)
+            var_name=PIXIED_MACHINE_ID
+            option_name=--machine-id
+            ;;
+        pixi_home)
+            var_name=PIXIED_PIXI_HOME
+            option_name=--pixi-home
+            ;;
+        esac
+        current=${!var_name:-}
+        state_value=${PIXIED_STATE[$option]:-}
+        [ "$current" = "$state_value" ] ||
+            pixied_die "active runtime rejects identity-changing option: $option_name '$current' (verified state uses '$state_value')"
+    done
 }
 
 # @description Apply option values from a validated existing state.

@@ -767,7 +767,7 @@ PYPROJECT
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$peer_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes \
-            --home-mode nfs --local-home "$peer_local_home" --session-manager none
+        --home-mode nfs --local-home "$peer_local_home" --session-manager none
     assert_success
     [ -f "$state/pixied/machines/$peer_id/state" ] ||
         pixied_test_fail "peer state is missing"
@@ -1652,6 +1652,39 @@ CURL
     [ -d "$home" ] || pixied_test_fail "shared account home was removed"
 }
 
+@test "uninstall rejects a full data dir containing another machine state's pixi home" {
+    local home="$PIXIED_TEST_ROOT/nested-home"
+    local data="$PIXIED_TEST_ROOT/nested-data"
+    local config="$PIXIED_TEST_ROOT/nested-config"
+    local state="$PIXIED_TEST_ROOT/nested-state"
+    local log="$PIXIED_TEST_ROOT/nested.log"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
+        PIXIED_MACHINE_ID=nested-a PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data/other" XDG_CONFIG_HOME="$config/other" \
+        XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
+        PIXIED_MACHINE_ID=nested-b PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes --pixi-home "$data/pixied/pixi"
+    assert_success
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
+        PIXIED_MACHINE_ID=nested-a PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" uninstall --yes
+    assert_failure
+    [ -d "$data/pixied/pixi" ] ||
+        pixied_test_fail "another machine state pixi home was removed"
+    [ -f "$state/pixied/machines/nested-a/state" ] ||
+        pixied_test_fail "current machine state was removed before rejection"
+}
+
 # US-107-1
 @test "uninstall stops when a managed artifact hash does not match" {
     local home="$PIXIED_TEST_ROOT/phase6-hash-home"
@@ -1789,6 +1822,9 @@ CURL
         bash "$data/pixied/bin/pixied" uninstall --yes
     assert_failure 1
     assert_output --partial 'managed Zellij session is active'
+    assert_output --partial $'To uninstall:\n  1. Verify the session:'
+    assert_output --partial $'\n  2. End the session:'
+    assert_output --partial $'\n  3. Rerun: pixied uninstall'
     [ -f "$state/pixied/machines/phase6-active-session/state" ] ||
         pixied_test_fail "state was removed while the Zellij session was active"
     [ -d "$data/pixied" ] ||
@@ -2443,6 +2479,11 @@ CASES
         'printf lock-child >"$HOME/lock-child"'
     assert_failure 1
     assert_output --partial 'state lock already exists'
+    assert_output --partial $'If you use Zellij, a detached session also blocks uninstall:\n  1. Check:'
+    assert_output --partial $'\n  2. End the managed session:'
+    assert_output --partial $'\n  3. Remove only the empty stale lock: rmdir -- '
+    assert_output --partial "'$state/pixied/.lock'"
+    assert_output --partial $'\nDo not use rm -rf.'
     [ ! -e "$local_home/lock-child" ] || pixied_test_fail "child ran while sync lock existed"
     [ -d "$state/pixied/.lock" ] || pixied_test_fail "existing sync lock was removed"
     rmdir "$state/pixied/.lock"
@@ -2753,6 +2794,355 @@ CASES
         bash "$PIXIED_REPO_ROOT" "$lock"
     assert_failure
     assert_output --partial 'state lock already exists'
-    assert_output --partial 'PixiEden may already be active or the lock may be stale'
+    assert_output --partial 'The PixiEden runtime may still be active, or the lock may be stale'
     [ -d "$lock" ] || pixied_test_fail "existing lock was removed"
+}
+
+# @description Build a non-active first deployment that can later be re-spawned as an active runtime.
+# @arg $1 string Test-scoped prefix used for all scratch paths.
+# @arg $2 string Machine id written into the generated state file.
+# @arg $3 string Session manager for the fixture (default: none).
+# @set ah_home ah_data ah_config ah_state ah_log ah_existing ah_data_dir ah_state_file ah_id ah_session Globals for the active-runtime helpers.
+pixied_active_fixture() {
+    local prefix=$1 id=$2 session_manager=${3:-none}
+    local fake_bin="$PIXIED_TEST_ROOT/${prefix}-fakebin"
+    ah_prefix=$prefix
+    ah_id=$id
+    ah_session=$session_manager
+    ah_home="$PIXIED_TEST_ROOT/${prefix}-home"
+    ah_data="$PIXIED_TEST_ROOT/${prefix}-data"
+    ah_config="$PIXIED_TEST_ROOT/${prefix}-config"
+    ah_state="$PIXIED_TEST_ROOT/${prefix}-state"
+    ah_log="$PIXIED_TEST_ROOT/${prefix}.log"
+    ah_existing="$PIXIED_TEST_ROOT/${prefix}-existing-pixi"
+    ah_data_dir="$ah_data/pixied"
+    ah_state_file="$ah_state/pixied/machines/$id/state"
+    mkdir -p "$ah_home" "$ah_existing/bin" "$fake_bin"
+    ln -sf "$PIXIED_REPO_ROOT/tests/fakes/external-command" "$fake_bin/zellij"
+    printf 'pre-existing Pixi environment\n' >"$ah_existing/bin/pixi"
+    : >"$ah_log"
+    run env HOME="$ah_home" PATH="$fake_bin:$PATH" PIXI_HOME="$ah_existing" \
+        XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" XDG_STATE_HOME="$ah_state" \
+        PIXIED_MACHINE_ID="$id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER="$session_manager" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$ah_log" PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -f "$ah_state_file" ] || pixied_test_fail "fixture state file is missing: $ah_state_file"
+}
+
+# @description Run a command with the active-runtime environment derived from the fixture.
+# @arg $@ string Command and arguments to run.
+pixied_active_run() {
+    # Simulate the runtime session that already holds the state lock. In
+    # production pixied_sync_runtime_begin acquires PIXIED_STATE_DIR/.lock and
+    # holds it for the session lifetime; the active uninstall borrows this
+    # existing lock, so it must exist before an active-runtime command runs.
+    # The lock is created here (not in pixied_active_fixture) so the fixture's
+    # initial non-active install-local.sh --yes deploy is not blocked by an
+    # existing lock.
+    mkdir -p "$ah_state/pixied/.lock"
+    env HOME="$ah_home" PATH="$PIXIED_TEST_ROOT/${ah_prefix}-fakebin:$PATH" PIXI_HOME="$ah_existing" \
+        XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" XDG_STATE_HOME="$ah_state" \
+        PIXIED_MACHINE_ID="$ah_id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER="$ah_session" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$ah_log" \
+        PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$ah_state_file" \
+        "$@"
+}
+
+# @description Assert that no staging or backup residue remains after a deploy/rollback.
+# @arg $1 string Parent directory that should not contain .pixied-stage.* or .pixied-backup.*.
+pixied_assert_no_deploy_residue() {
+    local parent=$1 found
+    found=$(find "$parent" -maxdepth 1 \( -name '.pixied-stage.*' -o -name '.pixied-backup.*' \) 2>/dev/null)
+    [ -z "$found" ] || pixied_test_fail "deployment residue found in $parent: $found"
+}
+
+@test "active runtime: missing state rejects both install entry points" {
+    local home="$PIXIED_TEST_ROOT/missing-home"
+    local data="$PIXIED_TEST_ROOT/missing-data"
+    local state="$PIXIED_TEST_ROOT/missing-state"
+    local bad_state="$state/pixied/machines/missing/state"
+    local log="$PIXIED_TEST_ROOT/missing.log"
+    mkdir -p "$home"
+    : >"$log"
+
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$home/.config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=missing PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
+        PIXIED_RUNTIME_STATE_FILE="$bad_state" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_failure
+    assert_output --partial 'managed path is missing or is a symlink'
+    [ ! -e "$data/pixied/bin/pixied" ] || pixied_test_fail "install deployed despite missing state"
+
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$home/.config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=missing PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
+        PIXIED_RUNTIME_STATE_FILE="$bad_state" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_failure
+    assert_output --partial 'managed path is missing or is a symlink'
+    [ ! -e "$data/pixied/bin/pixied" ] || pixied_test_fail "install-local deployed despite missing state"
+}
+
+@test "active runtime: reinstall preserves account identity" {
+    pixied_active_fixture ar-reinstall ar-reinstall
+    run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes
+    assert_success
+    assert_output --partial 'Active runtime installation kept the verified identity intact'
+    grep -Fq -- "account_home=$ah_home" "$ah_state_file" ||
+        pixied_test_fail "state account home changed during active reinstall"
+    [ -f "$ah_config/pixied/runtime-hook.bash" ] ||
+        pixied_test_fail "runtime hook missing after active reinstall"
+    grep -Fq -- "account_home=$ah_home" "$ah_config/pixied/runtime-hook.bash" ||
+        pixied_test_fail "runtime hook embeds a changed account home"
+}
+
+@test "active runtime: verified state overrides forged environment" {
+    pixied_active_fixture ar-forged ar-forged
+    # This active install runs directly (not through pixied_active_run), so the
+    # runtime-held state lock it expects must be created here.
+    mkdir -p "$ah_state/pixied/.lock"
+    run env HOME="$ah_home" PATH="$PIXIED_TEST_ROOT/ar-forged-fakebin:$PATH" \
+        PIXI_HOME="$ah_existing" XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" \
+        XDG_STATE_HOME="$ah_state" PIXIED_MACHINE_ID=ar-forged PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$ah_log" PIXIED_ACCOUNT_HOME=/forged/path \
+        PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$ah_state_file" \
+        bash "$ah_data_dir/bin/pixied" install --yes
+    assert_success
+    grep -Fq -- "account_home=$ah_home" "$ah_state_file" ||
+        pixied_test_fail "forged PIXIED_ACCOUNT_HOME leaked into state"
+    grep -Fq -- "account_home=$ah_home" "$ah_config/pixied/runtime-hook.bash" ||
+        pixied_test_fail "runtime hook embeds the forged account home"
+    if grep -Fq -- 'account_home=/forged/path' "$ah_config/pixied/runtime-hook.bash"; then
+        pixied_test_fail "runtime hook embeds the forged account home literally"
+    fi
+}
+
+@test "active runtime: resolved state variables survive repeated path resolution" {
+    pixied_active_fixture ar-resolve ar-resolve
+    run pixied_active_run bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        . "$1/lib/options.sh"
+        pixied_enable_strict_mode
+        pixied_state_bootstrap_active_runtime
+        [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ] || { echo "not active"; exit 1; }
+        pixied_state_load "$PIXIED_STATE_FILE"
+        pixied_options_apply_state
+        pixied_resolve_paths
+        pixied_resolve_paths
+        pixied_options_apply_state
+        pixied_resolve_paths
+        [ "$PIXIED_ACCOUNT_HOME" = "${PIXIED_STATE[account_home]}" ] || { echo "account_home mismatch"; exit 1; }
+        [ "$PIXIED_LOCAL_HOME" = "${PIXIED_STATE[local_home]}" ] || { echo "local_home mismatch"; exit 1; }
+        [ "$PIXIED_HOME_MODE" = "${PIXIED_STATE[home_mode]}" ] || { echo "home_mode mismatch"; exit 1; }
+        [ "$PIXIED_DATA_DIR" = "${PIXIED_STATE[data_dir]}" ] || { echo "data_dir mismatch"; exit 1; }
+        [ "$PIXIED_CONFIG_DIR" = "${PIXIED_STATE[config_dir]}" ] || { echo "config_dir mismatch"; exit 1; }
+        [ "$PIXIED_COMMAND_BIN" = "${PIXIED_STATE[command_bin]}" ] || { echo "command_bin mismatch"; exit 1; }
+        [ "$PIXIED_PIXI_HOME" = "${PIXIED_STATE[pixi_home]}" ] || { echo "pixi_home mismatch"; exit 1; }
+        [ "$PIXIED_MACHINE_ID" = "${PIXIED_STATE[machine_id]}" ] || { echo "machine_id mismatch"; exit 1; }
+        [ "$PIXIED_STATE_DIR" = "${PIXIED_STATE[state_dir]}" ] || { echo "state_dir mismatch"; exit 1; }
+        [ "$PIXIED_STATE_FILE" = "${PIXIED_STATE_DIR}/machines/${PIXIED_MACHINE_ID}/state" ] || { echo "state_file mismatch"; exit 1; }
+        [ "$PIXIED_MACHINE_STATE_DIR" = "${PIXIED_STATE_DIR}/machines/${PIXIED_MACHINE_ID}" ] || { echo "machine_state_dir mismatch"; exit 1; }
+        pixied_state_assert_active_consistency
+        echo ACTIVE_CONSISTENT
+
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output --partial ACTIVE_CONSISTENT
+}
+
+@test "active runtime: invalid state identity is rejected" {
+    local real_home="$PIXIED_TEST_ROOT/bad-id-real-home"
+    local real_data="$PIXIED_TEST_ROOT/bad-id-real-data"
+    local real_state="$PIXIED_TEST_ROOT/bad-id-real-state"
+    local forged="$PIXIED_TEST_ROOT/bad-id-forged-state/pixied/machines/forged/state"
+    local log="$PIXIED_TEST_ROOT/bad-id.log"
+    mkdir -p "$real_home" "$(dirname "$forged")"
+    : >"$log"
+
+    cat >"$forged" <<'EOF'
+state_version=1
+machine_id=forged
+account_home=/forged/account
+home_mode=local
+local_home=/forged/local
+session_manager=none
+data_dir=/forged/data
+config_dir=/forged/config
+state_dir=/forged/state
+command_bin=/forged/bin
+pixi_home=/forged/pixi
+sync_baseline=/forged/sync-baseline
+EOF
+    run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
+        XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
+        PIXIED_RUNTIME_STATE_FILE="$forged" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_failure
+    assert_output --partial 'active runtime state is missing or unverifiable'
+
+    run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
+        XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
+        PIXIED_RUNTIME_STATE_FILE="$forged" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" uninstall --yes
+    assert_failure
+    assert_output --partial 'active runtime state is missing or unverifiable'
+
+    local mismatched="$PIXIED_TEST_ROOT/bad-id-path-state/pixied/machines/real/state"
+    mkdir -p "$(dirname "$mismatched")"
+    cat >"$mismatched" <<'EOF'
+state_version=1
+machine_id=real
+account_home=/real/account
+home_mode=local
+local_home=/real/local
+session_manager=none
+data_dir=/wrong/state/dir
+config_dir=/wrong/config
+state_dir=/wrong/state/dir
+command_bin=/wrong/bin
+pixi_home=/wrong/pixi
+sync_baseline=/wrong/sync-baseline
+EOF
+    run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
+        XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
+        PIXIED_RUNTIME_STATE_FILE="$mismatched" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_failure
+    assert_output --partial 'active runtime state is missing or unverifiable'
+
+    local obsolete="$PIXIED_TEST_ROOT/bad-id-obsolete-state/pixied/machines/real/state"
+    mkdir -p "$(dirname "$obsolete")"
+    cat >"$obsolete" <<'EOF'
+state_version=1
+machine_id=real
+account_home=/real/account
+home_mode=local
+local_home=/real/local
+session_manager=none
+data_dir=/real/data
+config_dir=/real/config
+state_dir=/real/data
+command_bin=/real/bin
+pixi_home=/real/pixi
+systemd_user_dir=/real/systemd
+sync_baseline=/real/sync-baseline
+EOF
+    run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
+        XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
+        PIXIED_RUNTIME_STATE_FILE="$obsolete" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_failure
+    assert_output --partial 'obsolete state key'
+}
+
+@test "active runtime: identity-changing options are rejected" {
+    pixied_active_fixture ar-idopt ar-idopt
+    local opt
+    for opt in '--machine-id other' '--home-mode nfs' '--session-manager zellij' '--local-home /forged/local' '--pixi-home /forged/pixi'; do
+        run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes $opt
+        assert_failure || pixied_test_fail "option '$opt' was not rejected"
+        assert_output --partial 'active runtime rejects identity-changing option' ||
+            pixied_test_fail "option '$opt' missing the rejection message"
+    done
+}
+
+@test "bootstrap: install-local preserves the non-active initial path" {
+    pixied_active_fixture ar-bootstrap ar-bootstrap
+    [ -x "$ah_data_dir/bin/pixied" ] || pixied_test_fail "deployed CLI is missing"
+    grep -Fq -- "data_dir=$ah_data_dir" "$ah_state_file" ||
+        pixied_test_fail "data_dir was not resolved to the XDG default"
+    [ -e "$ah_home/.local/bin/pixied" ] || pixied_test_fail "launcher was not created"
+    pixied_assert_no_deploy_residue "$ah_data"
+    run bash "$ah_data_dir/bin/pixied" version
+    assert_success
+}
+
+@test "active runtime: install-local delegates with verified state" {
+    pixied_active_fixture ar-delegate ar-delegate
+    run pixied_active_run bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    assert_output --partial 'Runtime hook, dedicated Pixi environment, and session support are ready'
+    grep -Fq -- "account_home=$ah_home" "$ah_state_file" ||
+        pixied_test_fail "state account home changed during active delegation"
+    [ -f "$ah_config/pixied/runtime-hook.bash" ] ||
+        pixied_test_fail "runtime hook missing after active delegation"
+    grep -Fq -- "account_home=$ah_home" "$ah_config/pixied/runtime-hook.bash" ||
+        pixied_test_fail "delegated install regenerated a hook with a changed account home"
+    [ -x "$ah_data_dir/bin/pixied" ] ||
+        pixied_test_fail "deployment is missing from the state-derived data dir"
+}
+
+@test "bootstrap: promotion rollback restores the previous deployment" {
+    pixied_active_fixture ar-rollback ar-rollback
+    local before
+    before=$(sha256sum "$ah_data_dir/bin/pixied" | cut -d' ' -f1)
+    run pixied_active_run PIXIED_DEPLOY_FAIL_PROMOTE=1 \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_failure
+    assert_output --partial 'deployment promotion failed'
+    pixied_assert_no_deploy_residue "$ah_data"
+    local after
+    after=$(sha256sum "$ah_data_dir/bin/pixied" | cut -d' ' -f1)
+    [ "$before" = "$after" ] || pixied_test_fail "deployment was not restored by rollback"
+    run bash "$ah_data_dir/bin/pixied" version
+    assert_success
+}
+
+@test "active runtime: uninstall preserves external resources" {
+    pixied_active_fixture ar-uninstall ar-uninstall
+    run pixied_active_run bash "$ah_data_dir/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$ah_data_dir" ] || pixied_test_fail "managed data dir was not removed"
+    [ ! -e "$ah_state_file" ] || pixied_test_fail "state file was not removed"
+    [ ! -e "$ah_home/.local/bin/pixied" ] || pixied_test_fail "launcher was not removed"
+    [ -d "$ah_home" ] || pixied_test_fail "account home was removed"
+    [ -f "$ah_existing/bin/pixi" ] || pixied_test_fail "existing Pixi home was removed"
+    if command grep -Eq -- '^(zellij|systemctl|loginctl|sudo) ' "$ah_log"; then
+        pixied_test_fail "uninstall invoked a session-related command"
+    fi
+}
+
+@test "active runtime: uninstall leaves stale parent environment visible" {
+    pixied_active_fixture ar-stale ar-stale
+    run pixied_active_run bash "$ah_data_dir/bin/pixied" uninstall --yes
+    assert_success
+    assert_output --partial "Run 'exit' to leave this runtime shell"
+    [ ! -e "$ah_home/.local/bin/pixied" ] || pixied_test_fail "launcher was not removed"
+}
+
+@test "active runtime: zellij install and uninstall safety" {
+    pixied_active_fixture ar-zellij ar-zellij zellij
+    [ -x "$ah_data_dir/pixi/bin/zellij" ] || pixied_test_fail "dedicated zellij is missing from fixture"
+
+    run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes
+    assert_success
+    assert_output --partial 'Active runtime installation kept the verified identity intact'
+
+    run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes --session-manager none
+    assert_failure
+    assert_output --partial 'active runtime rejects identity-changing option: --session-manager'
+
+    run pixied_active_run ZELLIJ=1 \
+        bash "$ah_data_dir/bin/pixied" uninstall --yes
+    assert_failure
+    assert_output --partial 'cannot uninstall from an attached Zellij runtime session'
+    [ -e "$ah_state_file" ] || pixied_test_fail "state was removed while the Zellij runtime was active"
+    [ -e "$ah_data_dir" ] || pixied_test_fail "data was removed while the Zellij runtime was active"
 }

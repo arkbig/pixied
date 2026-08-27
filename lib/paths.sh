@@ -234,63 +234,91 @@ pixied_resolve_paths() {
     local account_home requested_home_mode home_mode local_home data_home config_home state_home bin_home
     local data_dir config_dir state_dir command_bin
 
-    requested_home_mode=${PIXIED_HOME_MODE:-}
-    account_home=$(pixied_validate_home_directory "${HOME:-}" "account home")
-    export PIXIED_ACCOUNT_HOME=$account_home
-
-    home_mode=${PIXIED_HOME_MODE:-}
-    if [ -z "$home_mode" ]; then
-        home_mode=$(pixied_detect_home_mode "$account_home")
-    fi
-    case "$home_mode" in
-    local | nfs) ;;
-    *) pixied_path_fail "invalid home mode: $home_mode" "$PIXIED_EXIT_USAGE" ;;
-    esac
-
-    if [ "$home_mode" = nfs ]; then
-        local_home=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
-        if [ "$validate_home" -eq 1 ]; then
-            if [ ! -d "$local_home" ]; then
-                pixied_path_fail "selected NFS mode requires a local home. Create it before installation and make it writable and owned by the current user (for example: mkdir -p -- '$local_home'), or rerun with --local-home PATH pointing to an existing directory"
-            fi
-            local_home=$(pixied_validate_home_directory "$local_home" "local home")
-            [ "$local_home" != "$account_home" ] ||
-                pixied_path_fail "NFS local home must differ from account home"
-            pixied_is_local_filesystem "$local_home" ||
-                pixied_path_fail "local home is not on a local filesystem: $local_home"
-        fi
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
+        # Active runtime identity is sourced from the verified state bootstrap
+        # and must not be recomputed from $HOME or the current environment. The
+        # unverified PIXIED_* environment values are ignored; only the bootstrap
+        # exports are treated as the managed identity and paths.
+        account_home=${PIXIED_ACCOUNT_HOME:?active runtime account home is not set}
+        home_mode=${PIXIED_HOME_MODE:?active runtime home mode is not set}
+        local_home=${PIXIED_LOCAL_HOME:?active runtime local home is not set}
+        data_dir=${PIXIED_DATA_DIR:?active runtime data directory is not set}
+        config_dir=${PIXIED_CONFIG_DIR:?active runtime config directory is not set}
+        state_dir=${PIXIED_STATE_DIR:?active runtime state directory is not set}
+        command_bin=${PIXIED_COMMAND_BIN:?active runtime command bin is not set}
+        PIXIED_MACHINE_ID=${PIXIED_MACHINE_ID:?active runtime machine id is not set}
+        PIXIED_MACHINE_STATE_DIR=${PIXIED_MACHINE_STATE_DIR:?active runtime machine state directory is not set}
+        PIXIED_STATE_FILE=${PIXIED_STATE_FILE:?active runtime state file is not set}
+        export PIXIED_ACCOUNT_HOME=$account_home
+        export PIXIED_HOME_MODE=$home_mode
+        export PIXIED_LOCAL_HOME=$local_home
+        export PIXIED_DATA_DIR=$data_dir
+        export PIXIED_CONFIG_DIR=$config_dir
+        export PIXIED_STATE_DIR=$state_dir
+        export PIXIED_COMMAND_BIN=$command_bin
+        export PIXIED_MACHINE_ID
+        export PIXIED_MACHINE_STATE_DIR
+        export PIXIED_STATE_FILE
+        PIXIED_PIXI_HOME=${PIXIED_PIXI_HOME:-}
     else
-        local_home=$account_home
-        if [ "$validate_home" -eq 1 ] && [ "$requested_home_mode" = local ] &&
-            ! pixied_is_local_filesystem "$account_home"; then
-            pixied_warn "account home is not on a local filesystem; continuing with explicitly requested local home mode (NFS synchronization is disabled)"
+        requested_home_mode=${PIXIED_HOME_MODE:-}
+        account_home=$(pixied_validate_home_directory "${HOME:-}" "account home")
+        export PIXIED_ACCOUNT_HOME=$account_home
+
+        home_mode=${PIXIED_HOME_MODE:-}
+        if [ -z "$home_mode" ]; then
+            home_mode=$(pixied_detect_home_mode "$account_home")
         fi
+        case "$home_mode" in
+        local | nfs) ;;
+        *) pixied_path_fail "invalid home mode: $home_mode" "$PIXIED_EXIT_USAGE" ;;
+        esac
+
+        if [ "$home_mode" = nfs ]; then
+            local_home=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
+            if [ "$validate_home" -eq 1 ]; then
+                if [ ! -d "$local_home" ]; then
+                    pixied_path_fail "selected NFS mode requires a local home. Create it before installation and make it writable and owned by the current user (for example: mkdir -p -- '$local_home'), or rerun with --local-home PATH pointing to an existing directory"
+                fi
+                local_home=$(pixied_validate_home_directory "$local_home" "local home")
+                [ "$local_home" != "$account_home" ] ||
+                    pixied_path_fail "NFS local home must differ from account home"
+                pixied_is_local_filesystem "$local_home" ||
+                    pixied_path_fail "local home is not on a local filesystem: $local_home"
+            fi
+        else
+            local_home=$account_home
+            if [ "$validate_home" -eq 1 ] && [ "$requested_home_mode" = local ] &&
+                ! pixied_is_local_filesystem "$account_home"; then
+                pixied_warn "account home is not on a local filesystem; continuing with explicitly requested local home mode (NFS synchronization is disabled)"
+            fi
+        fi
+
+        data_home=${XDG_DATA_HOME:-$account_home/.local/share}
+        config_home=${XDG_CONFIG_HOME:-$account_home/.config}
+        state_home=${XDG_STATE_HOME:-$account_home/.local/state}
+        bin_home=${XDG_BIN_HOME:-$account_home/.local/bin}
+        data_home=$(pixied_resolve_xdg_path "$data_home")
+        config_home=$(pixied_resolve_xdg_path "$config_home")
+        state_home=$(pixied_resolve_xdg_path "$state_home")
+        bin_home=$(pixied_resolve_xdg_path "$bin_home")
+
+        data_dir=$(pixied_validate_canonical_path "${PIXIED_DATA_DIR:-$data_home/pixied}")
+        config_dir=$(pixied_validate_canonical_path "${PIXIED_CONFIG_DIR:-$config_home/pixied}")
+        state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE_DIR:-$state_home/pixied}")
+        command_bin=$(pixied_validate_canonical_path "${PIXIED_COMMAND_BIN:-$bin_home}")
+
+        export PIXIED_HOME_MODE=$home_mode
+        export PIXIED_LOCAL_HOME=$local_home
+        export PIXIED_DATA_DIR=$data_dir
+        export PIXIED_CONFIG_DIR=$config_dir
+        export PIXIED_STATE_DIR=$state_dir
+        export PIXIED_COMMAND_BIN=$command_bin
+        PIXIED_MACHINE_ID=$(pixied_machine_id)
+        export PIXIED_MACHINE_ID
+        export PIXIED_MACHINE_STATE_DIR="$state_dir/machines/$PIXIED_MACHINE_ID"
+        export PIXIED_STATE_FILE="$PIXIED_MACHINE_STATE_DIR/state"
     fi
-
-    data_home=${XDG_DATA_HOME:-$account_home/.local/share}
-    config_home=${XDG_CONFIG_HOME:-$account_home/.config}
-    state_home=${XDG_STATE_HOME:-$account_home/.local/state}
-    bin_home=${XDG_BIN_HOME:-$account_home/.local/bin}
-    data_home=$(pixied_resolve_xdg_path "$data_home")
-    config_home=$(pixied_resolve_xdg_path "$config_home")
-    state_home=$(pixied_resolve_xdg_path "$state_home")
-    bin_home=$(pixied_resolve_xdg_path "$bin_home")
-
-    data_dir=$(pixied_validate_canonical_path "${PIXIED_DATA_DIR:-$data_home/pixied}")
-    config_dir=$(pixied_validate_canonical_path "${PIXIED_CONFIG_DIR:-$config_home/pixied}")
-    state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE_DIR:-$state_home/pixied}")
-    command_bin=$(pixied_validate_canonical_path "${PIXIED_COMMAND_BIN:-$bin_home}")
-
-    export PIXIED_HOME_MODE=$home_mode
-    export PIXIED_LOCAL_HOME=$local_home
-    export PIXIED_DATA_DIR=$data_dir
-    export PIXIED_CONFIG_DIR=$config_dir
-    export PIXIED_STATE_DIR=$state_dir
-    export PIXIED_COMMAND_BIN=$command_bin
-    PIXIED_MACHINE_ID=$(pixied_machine_id)
-    export PIXIED_MACHINE_ID
-    export PIXIED_MACHINE_STATE_DIR="$state_dir/machines/$PIXIED_MACHINE_ID"
-    export PIXIED_STATE_FILE="$PIXIED_MACHINE_STATE_DIR/state"
 
     if [ "$home_mode" = nfs ]; then
         export PIXIED_PIXI_HOME="${PIXIED_PIXI_HOME:-$local_home/.local/share/pixied/pixi}"

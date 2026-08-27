@@ -147,6 +147,13 @@ rmdir -- "$PIXIED_STATE_DIR/.lock"
 
 実行中のprocessがある状態でlockを削除したり、lockに対して`rm -rf`を実行したりしないでください。
 
+detachしたZellij sessionは実行中のままであり、lockを保持していない場合でもuninstallを中止させます。次で管理対象sessionを確認して終了してから、再実行してください。
+
+```bash
+zellij list-sessions --no-formatting
+zellij delete-session pixied
+```
+
 ## 動作要件
 
 - `bash`、`curl`または`wget`、`tar`を利用できるUbuntuまたは互換`Linux`。
@@ -162,9 +169,44 @@ pixied uninstall
 
 uninstallは、current stateに記録された専用`PIXI_HOME`を管理境界にします。PixiEdenが新規作成した未共有の専用`PIXI_HOME`は、path、owner、stateを検証した後にdirectory単位で整理できます。既存pathまたは他machineと共有するpathでは、stateに記録されhashが一致する実行ファイルだけを整理し、共有Pixiのmetadata、manifest、`envs/`などは残る場合があります。PixiEdenはpackage単位の所有判定を行わず、現在のinstallが追加したGlobal packageだけを削除することも保証しません。
 
-対象の管理対象Zellij sessionが残っている場合、uninstallを中止します。sessionを終了またはdetachしてから`pixied uninstall`を再実行してください。session一覧を取得できない場合も安全側に中止します。
+対象の管理対象Zellij sessionが残っている場合、uninstallを中止します。エラーに表示されたZellij commandでsessionを確認し、`zellij delete-session pixied`で終了してから`pixied uninstall`を再実行してください。detachだけではsessionが残るため、uninstallはできません。session一覧を取得できない場合も安全側に中止します。
 
 最後に、追加したshell設定ファイル（`~/.bashrc`または`~/.zshrc`など）からPixiEdenのhookブロックを手動で削除してください。途中で中断した場合も、ランチャーまたは配備済みCLIが残っていれば`pixied uninstall`を再実行できます。
+
+## アクティブruntimeからの運用
+
+専用環境を有効化したshell（アクティブruntime）の中から`pixied install`や`pixied uninstall`を実行できます。ここでは**検証済みstate file**がidentityのsource of truthです。identityは`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からは再計算されません。
+
+アクティブruntimeは`PIXIED_RUNTIME_HOOK_ACTIVE=1`と、絶対正規化pathである`PIXIED_RUNTIME_STATE_FILE`（`<state_dir>/machines/<machine_id>/state`形式）の両方が揃ったときにのみ検出されます。state fileが不在または検証不能な場合、install/uninstallは次のように失敗します。
+
+```text
+active runtime state is missing or unverifiable; PixiEden refuses to change identity from an active runtime; re-source the runtime from a valid deployment
+```
+
+アクティブruntimeでは次のidentityを変更できません。`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`のいずれかを指定すると却下されます。
+
+```text
+active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')
+```
+
+reinstallでsession managerを変更しようとすると、次のように却下されます。
+
+```text
+cannot change session manager during reinstall; run uninstall first
+```
+
+install/uninstallは現在のsessionが保持する環境を変えずにstateを更新します。`exit`でruntime shellを抜けたあと、runtimeを再起動または再attachすると新しい設定が反映されます。
+
+```bash
+exit            # アクティブruntime shellから抜ける
+# runtimeを再起動 / 再attachして専用環境を再評価する
+```
+
+session managerが`zellij`のアクティブruntimeからはuninstallできません。管理対象Zellij sessionが接続中のためです。sessionをdetach（またはruntime shellを`exit`）してからuninstallを再実行してください。
+
+```text
+cannot uninstall from an active Zellij runtime; detach the managed Zellij session (exit the runtime shell) and rerun the uninstall
+```
 
 ## パスと XDG 対応
 

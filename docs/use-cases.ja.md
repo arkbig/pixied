@@ -116,3 +116,21 @@ NFSホームで開発する。
 2. PixiEdenがプロジェクト定義を検証し、既存ファイルの状態を確認する。
 3. `direnv`は既存`.envrc`へ重複なくブロックを挿入する。`devcontainer`/`dockerfile`は既定で既存ファイルを上書きせずエラーで終了し、`--force`指定時に上書きして直前のファイルを`<name>.bak`へ1世代backupする。
 4. 生成物はPixiEdenの専用Pixi runtimeを土台にし、プロジェクト外やホストの既存Pixi環境へ影響を与えない。生成`.envrc`は`pixied generate direnv --print-envrc`形式で評価し、`pixied`がPATHにない生成時はCLIの絶対pathを使う。`--print-envrc`はファイルを書き込まない。生成`.envrc`の評価だけではNFS同期やsession起動を行わない。
+
+### UC-09
+
+アクティブruntime内から再インストールする。
+
+1. 利用者が専用環境を有効化したruntime shellから`pixied install`を実行する。
+2. PixiEdenが`PIXIED_RUNTIME_HOOK_ACTIVE=1`と`PIXIED_RUNTIME_STATE_FILE`の両方を検証し、アクティブruntimeと判定する。
+3. PixiEdenが検証済みstate fileをidentityのsource of truthとして読み込み、指定されたidentity変更option（`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`）を却下する。reinstallでsession managerを変更しようとした場合も却下する。
+4. それ以外のオプションで設定を更新し、stateを書き込む。現在のsessionが保持する環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。
+
+### UC-10
+
+アクティブruntime内からアンインストールする。
+
+1. 利用者が専用環境を有効化したruntime shellから`pixied uninstall`を実行する。
+2. PixiEdenがアクティブruntimeかつ検証済みstate fileをsource of truthとしてidentityを解決する（`$HOME`からは再計算しない）。
+3. `zellij`のアクティブruntimeの場合、専用sessionのdetachを求めて却下する。
+4. `none`のアクティブruntimeの場合、所有資源を整理してstateを更新する。現在のsessionが保持する環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。

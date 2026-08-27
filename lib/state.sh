@@ -12,6 +12,7 @@ PIXIED_STATE_LOADED=1
 
 declare -gA PIXIED_STATE=()
 PIXIED_STATE_LOCK_DIR=""
+PIXIED_STATE_LOCK_BORROWED=0
 
 # @description Bit mask of the group-write and other-write permission bits (octal 022).
 readonly PIXIED_MODE_GROUP_OTHER_WRITE=18
@@ -325,17 +326,6 @@ pixied_atomic_write() {
     fi
 }
 
-# @description Print PIXIED_STATE as 'key=value' entries in key order.
-# @stdout The serialized state
-pixied_state_serialize() {
-    local key
-    for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
-        if pixied_state_has "$key"; then
-            printf '%s=%s\n' "$key" "${PIXIED_STATE[$key]}"
-        fi
-    done
-}
-
 # @description Validate PIXIED_STATE and write it atomically to the state file.
 # Requires the lock to be held and appends a trailing newline.
 #
@@ -440,6 +430,53 @@ pixied_state_load_external() {
     pixied_state_validate_structure
 }
 
+# @description Serialize the current PIXIED_STATE into key=value lines.
+# Used to recover a loaded state across a subshell boundary so a fatal load
+# error can be converted into a return code instead of aborting the process.
+# Present keys are emitted in PIXIED_STATE_KEY_ORDER; empty values are kept so
+# optional state fields survive the round trip.
+#
+# @stdout One key=value line per present state key, in canonical key order.
+pixied_state_serialize() {
+    local key
+    for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
+        case "${PIXIED_STATE[$key]+present}" in
+        present) printf '%s=%s\n' "$key" "${PIXIED_STATE[$key]}" ;;
+        esac
+    done
+}
+
+# @description Load the verified active runtime state, returning 1 on failure.
+# Unlike pixied_state_load_external, a malformed, unowned, or invalid state file
+# does not abort the process. The load runs in a command-substitution subshell so
+# the pixied_die inside pixied_state_load_external becomes a non-zero exit, then
+# the serialized state is repopulated in the caller. This lets the active-runtime
+# bootstrap translate the failure into the shared fatal error via
+# || pixied_state_active_runtime_error.
+#
+# @arg $1 string The state file path.
+# @set PIXIED_STATE assoc The loaded active state.
+# @exitcode 0 When the active state loads and validates.
+# @exitcode 1 When load or validation fails.
+pixied_state_load_active() {
+    local serialized line key value
+    serialized=$(
+        if pixied_state_load_external "$1"; then
+            pixied_state_serialize
+        else
+            exit 1
+        fi
+    ) || return 1
+    pixied_state_reset
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        key=${line%%=*}
+        value=${line#*=}
+        pixied_state_set "$key" "$value"
+    done <<<"$serialized"
+    return 0
+}
+
 # @description Acquire the state lock as a directory.
 # Validates the parent directory, creates the lock with mkdir, and
 # protects its permissions.
@@ -450,13 +487,22 @@ pixied_state_load_external() {
 # @exitcode 1 When the lock could not be acquired
 # @see pixied_validate_owned_path
 pixied_state_lock_acquire() {
-    local lock_dir=${1:-${PIXIED_STATE_DIR:-}/.lock} parent
+    local lock_dir=${1:-${PIXIED_STATE_DIR:-}/.lock} parent message
     lock_dir=$(pixied_validate_canonical_path "$lock_dir")
     parent=${lock_dir%/*}
     [ -d "$parent" ] || pixied_die "state lock parent does not exist: $parent"
     pixied_validate_owned_path "$parent"
     if [ -e "$lock_dir" ]; then
-        pixied_die "state lock already exists: $lock_dir; PixiEden may already be active or the lock may be stale; stop the active runtime or remove the stale lock directory manually"
+        message="state lock already exists: $lock_dir"
+        message+=$'\nThe PixiEden runtime may still be active, or the lock may be stale.'
+        message+=$'\nIf you use Zellij, a detached session also blocks uninstall:'
+        message+=$'\n  1. Check: zellij list-sessions --no-formatting'
+        message+=$'\n  2. End the managed session: zellij delete-session pixied'
+        message+=$'\nAfter no PixiEden runtime or managed Zellij session remains:'
+        message+=$'\n  3. Remove only the empty stale lock: rmdir -- '
+        message+="'$lock_dir'"
+        message+=$'\nDo not use rm -rf.'
+        pixied_die "$message"
     fi
     if ! pixied_run mkdir -- "$lock_dir"; then
         pixied_die "could not acquire state lock: $lock_dir"
@@ -468,12 +514,216 @@ pixied_state_lock_acquire() {
     PIXIED_STATE_LOCK_DIR=$lock_dir
 }
 
+# @description Adopt the state lock already held by the active runtime.
+# When uninstall runs inside an active PixiEden runtime, the launching runtime
+# process already holds the state lock. A second acquire would fail because the
+# lock directory exists, so this reuses the existing lock instead of creating a
+# competing one. The adopted lock is marked borrowed so cleanup never removes
+# the runtime's lock; the runtime releases it when its shell exits.
+#
+# Entry condition: only call from an active runtime where PIXIED_ACTIVE_RUNTIME=1.
+#
+# @set PIXIED_STATE_LOCK_DIR string The existing lock directory.
+# @set PIXIED_STATE_LOCK_BORROWED integer 1 while the lock is borrowed.
+# @exitcode 0 When the existing runtime lock is adopted.
+# @exitcode 1 When the runtime lock is missing or invalid.
+pixied_state_lock_adopt_active() {
+    local lock_dir parent
+    lock_dir=$(pixied_validate_canonical_path "${PIXIED_STATE_DIR:-}/.lock")
+    parent=${lock_dir%/*}
+    [ -d "$parent" ] || pixied_die "state lock parent does not exist: $parent"
+    pixied_validate_owned_path "$parent"
+    if [ ! -e "$lock_dir" ] && [ ! -L "$lock_dir" ]; then
+        pixied_die "active runtime state lock is missing; the runtime may have exited: $lock_dir"
+    fi
+    [ -d "$lock_dir" ] || pixied_die "active runtime state lock is not a directory: $lock_dir"
+    [ ! -L "$lock_dir" ] || pixied_die "active runtime state lock is a symlink: $lock_dir"
+    pixied_validate_owned_path "$lock_dir"
+    PIXIED_STATE_LOCK_DIR=$lock_dir
+    PIXIED_STATE_LOCK_BORROWED=1
+    export PIXIED_STATE_LOCK_BORROWED
+}
+
 # @description Release the held state lock.
-# Returns immediately when no lock is held.
+# Returns immediately when no lock is held. A borrowed lock (adopted from the
+# active runtime) is left in place so the runtime releases it on exit.
 #
 # @set PIXIED_STATE_LOCK_DIR string Becomes an empty string after release
 pixied_state_lock_release() {
     [ -n "$PIXIED_STATE_LOCK_DIR" ] || return 0
+    if [ "${PIXIED_STATE_LOCK_BORROWED:-0}" = 1 ]; then
+        PIXIED_STATE_LOCK_DIR=""
+        return 0
+    fi
     pixied_run rmdir -- "$PIXIED_STATE_LOCK_DIR"
     PIXIED_STATE_LOCK_DIR=""
+}
+
+# @description Fail with the shared active-runtime error used by install and uninstall entry points.
+# An active runtime cannot fall back to $HOME or guess a state file, so a
+# missing or unverifiable state is always fatal with the same message.
+#
+# @arg $1 string Optional detail describing the failure
+# @exitcode 1 Always
+pixied_state_active_runtime_error() {
+    local detail=${1:-}
+    local message="active runtime state is missing or unverifiable"
+    [ -z "$detail" ] || message="$message: $detail"
+    pixied_die "$message; PixiEden refuses to change identity from an active runtime; re-source the runtime from a valid deployment" "$PIXIED_EXIT_FAILURE"
+}
+
+# @description Load the verified active runtime state and export its identity.
+# The verified state file is the source of truth for an active runtime; the
+# runtime environment only locates and gates entry to it and is never used as an
+# unverified path value.
+#
+# Entry condition: an active runtime is present only when BOTH
+# PIXIED_RUNTIME_HOOK_ACTIVE=1 and a non-empty PIXIED_RUNTIME_STATE_FILE are set.
+# A single signal is not sufficient and falls through to the non-active path.
+#
+# Non-active: no-op, sets PIXIED_ACTIVE_RUNTIME=0, returns 0.
+# Active and verified: sets PIXIED_ACTIVE_RUNTIME=1 and exports the identity and
+# managed path variables derived from the verified state.
+# Active and missing or invalid: fatal via pixied_state_active_runtime_error.
+#
+# @set PIXIED_ACTIVE_RUNTIME string 1 when bootstrap succeeded in an active runtime
+# @set PIXIED_ACCOUNT_HOME string Verified account home from state
+# @set PIXIED_LOCAL_HOME string Verified local home from state
+# @set PIXIED_HOME_MODE string Verified home mode from state
+# @set PIXIED_DATA_DIR string Verified data directory from state
+# @set PIXIED_CONFIG_DIR string Verified config directory from state
+# @set PIXIED_COMMAND_BIN string Verified command bin from state
+# @set PIXIED_PIXI_HOME string Verified pixi home from state
+# @set PIXIED_MACHINE_ID string Verified machine id from state
+# @set PIXIED_STATE_DIR string Verified state directory from state
+# @set PIXIED_STATE_FILE string Verified state file (runtime state file)
+# @set PIXIED_MACHINE_STATE_DIR string Verified machine state directory
+# @exitcode 0 Non-active or active-verified
+# @exitcode 1 Active but missing or invalid
+# @see pixied_state_load_external
+# @see pixied_state_active_runtime_error
+pixied_state_bootstrap_active_runtime() {
+    PIXIED_ACTIVE_RUNTIME=0
+    export PIXIED_ACTIVE_RUNTIME
+    if [ "${PIXIED_RUNTIME_HOOK_ACTIVE:-0}" != 1 ] || [ -z "${PIXIED_RUNTIME_STATE_FILE:-}" ]; then
+        return 0
+    fi
+
+    local runtime_state_file state_file_basename state_machine_id state_grandparent
+    local expected_state_file canonical
+    runtime_state_file=${PIXIED_RUNTIME_STATE_FILE:-}
+    [ -n "$runtime_state_file" ] || pixied_state_active_runtime_error "runtime state file is not set"
+    case "$runtime_state_file" in
+    /*) ;;
+    *) pixied_state_active_runtime_error "runtime state file must be absolute: $runtime_state_file" ;;
+    esac
+    canonical=$(pixied_run realpath -m -- "$runtime_state_file") ||
+        pixied_state_active_runtime_error "runtime state file cannot be resolved: $runtime_state_file"
+    [ "$runtime_state_file" = "$canonical" ] ||
+        pixied_state_active_runtime_error "runtime state file is not canonical (contains a symlink): $runtime_state_file"
+    runtime_state_file=$canonical
+
+    # The state file must have the form machines/<machine_id>/state.
+    state_file_basename=$(pixied_run basename -- "$runtime_state_file")
+    state_machine_id=$(pixied_run basename -- "$(pixied_run dirname -- "$runtime_state_file")")
+    state_grandparent=$(pixied_run basename -- "$(pixied_run dirname -- "$(pixied_run dirname -- "$runtime_state_file")")")
+    [ "$state_file_basename" = state ] ||
+        pixied_state_active_runtime_error "runtime state file is not named 'state': $runtime_state_file"
+    [ "$state_grandparent" = machines ] ||
+        pixied_state_active_runtime_error "runtime state file is not under a machines/ directory: $runtime_state_file"
+
+    # Load the verified active state. The soft loader returns 1 on any failure
+    # (malformed, unowned, invalid, or missing) instead of aborting, so a failed
+    # load reaches the shared fatal error below with the same message contract.
+    pixied_state_load_active "$runtime_state_file" ||
+        pixied_state_active_runtime_error "runtime state file failed to load: $runtime_state_file"
+
+    # Explicitly verify the state machine id matches the state file directory and
+    # the runtime state file's expected location. The structural check against the
+    # state content is required; the previous runtime environment check is dropped
+    # so an explicit --machine-id can be rejected through the standard
+    # active-identity message instead of a bootstrap-specific one.
+    [ "${PIXIED_STATE[machine_id]:-}" = "$state_machine_id" ] ||
+        pixied_state_active_runtime_error "state machine id does not match the runtime state file directory"
+    expected_state_file="${PIXIED_STATE[state_dir]:-}/machines/${state_machine_id}/state"
+    [ "$runtime_state_file" = "$expected_state_file" ] ||
+        pixied_state_active_runtime_error "runtime state file is not at the verified state location: $runtime_state_file"
+
+    # The verified state must carry the managed paths bootstrap exports. Core
+    # validation does not require them, so assert them here to avoid an unbound
+    # variable under set -u and to guarantee a usable active runtime.
+    local managed_key
+    for managed_key in data_dir config_dir command_bin state_dir; do
+        pixied_state_has "$managed_key" ||
+            pixied_state_active_runtime_error "runtime state is missing a required managed path: $managed_key"
+        [ -n "${PIXIED_STATE[$managed_key]}" ] ||
+            pixied_state_active_runtime_error "runtime state managed path is empty: $managed_key"
+    done
+
+    PIXIED_ACCOUNT_HOME=${PIXIED_STATE[account_home]}
+    # Identity-changing options supplied explicitly by the CLI or environment must
+    # survive bootstrap so pixied_install_assert_active_identity can reject them.
+    # When not explicit, the verified state is the source of truth for these values.
+    if ! pixied_options_is_explicit local_home; then
+        PIXIED_LOCAL_HOME=${PIXIED_STATE[local_home]}
+    fi
+    if ! pixied_options_is_explicit home_mode; then
+        PIXIED_HOME_MODE=${PIXIED_STATE[home_mode]}
+    fi
+    PIXIED_DATA_DIR=${PIXIED_STATE[data_dir]}
+    PIXIED_CONFIG_DIR=${PIXIED_STATE[config_dir]}
+    PIXIED_COMMAND_BIN=${PIXIED_STATE[command_bin]}
+    if ! pixied_options_is_explicit pixi_home; then
+        PIXIED_PIXI_HOME=${PIXIED_STATE[pixi_home]}
+    fi
+    if ! pixied_options_is_explicit session_manager; then
+        PIXIED_SESSION_MANAGER=${PIXIED_STATE[session_manager]}
+    fi
+    # When machine id is not supplied explicitly it comes from the verified state.
+    # An explicit --machine-id survives bootstrap so pixied_install_assert_active_identity
+    # can reject an identity change through the standard active-identity message.
+    if ! pixied_options_is_explicit machine_id; then
+        PIXIED_MACHINE_ID=${PIXIED_STATE[machine_id]}
+    fi
+    PIXIED_STATE_DIR=${PIXIED_STATE[state_dir]}
+    PIXIED_STATE_FILE=$runtime_state_file
+    PIXIED_MACHINE_STATE_DIR=$(pixied_run dirname -- "$runtime_state_file")
+
+    export PIXIED_ACCOUNT_HOME PIXIED_LOCAL_HOME PIXIED_HOME_MODE PIXIED_DATA_DIR
+    export PIXIED_CONFIG_DIR PIXIED_COMMAND_BIN PIXIED_PIXI_HOME PIXIED_MACHINE_ID
+    export PIXIED_STATE_DIR PIXIED_STATE_FILE PIXIED_MACHINE_STATE_DIR
+    export PIXIED_ACTIVE_RUNTIME=1
+
+    pixied_debug "active runtime bootstrap loaded verified state: $PIXIED_STATE_FILE"
+}
+
+# @description Verify exported identity and path variables match the verified active state.
+# Only acts within an active runtime. Call after identity resolution or after
+# applying the loaded state so a later code path cannot silently drift the
+# active identity away from the verified state.
+#
+# @exitcode 0 Non-active, or active with matching variables
+# @exitcode 1 Active and a variable drifted from the verified state
+pixied_state_assert_active_consistency() {
+    [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ] || return 0
+    [ "${PIXIED_ACCOUNT_HOME:-}" = "${PIXIED_STATE[account_home]}" ] ||
+        pixied_die "active runtime account home drifted from the verified state"
+    [ "${PIXIED_LOCAL_HOME:-}" = "${PIXIED_STATE[local_home]}" ] ||
+        pixied_die "active runtime local home drifted from the verified state"
+    [ "${PIXIED_HOME_MODE:-}" = "${PIXIED_STATE[home_mode]}" ] ||
+        pixied_die "active runtime home mode drifted from the verified state"
+    [ "${PIXIED_DATA_DIR:-}" = "${PIXIED_STATE[data_dir]}" ] ||
+        pixied_die "active runtime data dir drifted from the verified state"
+    [ "${PIXIED_CONFIG_DIR:-}" = "${PIXIED_STATE[config_dir]}" ] ||
+        pixied_die "active runtime config dir drifted from the verified state"
+    [ "${PIXIED_COMMAND_BIN:-}" = "${PIXIED_STATE[command_bin]}" ] ||
+        pixied_die "active runtime command bin drifted from the verified state"
+    [ "${PIXIED_PIXI_HOME:-}" = "${PIXIED_STATE[pixi_home]}" ] ||
+        pixied_die "active runtime pixi home drifted from the verified state"
+    [ "${PIXIED_STATE_DIR:-}" = "${PIXIED_STATE[state_dir]}" ] ||
+        pixied_die "active runtime state dir drifted from the verified state"
+    [ "${PIXIED_MACHINE_STATE_DIR:-}" = "${PIXIED_STATE[state_dir]}/machines/${PIXIED_STATE[machine_id]}" ] ||
+        pixied_die "active runtime machine state dir drifted from the verified state"
+    [ "${PIXIED_STATE_FILE:-}" = "${PIXIED_STATE[state_dir]}/machines/${PIXIED_STATE[machine_id]}/state" ] ||
+        pixied_die "active runtime state file drifted from the verified state"
 }
