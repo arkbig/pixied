@@ -236,6 +236,13 @@ pixied_install() {
         return "$PIXIED_EXIT_OK"
     fi
 
+    # Load the verified active runtime state. In an active runtime this sets the
+    # identity and managed paths from the verified state file and refuses a
+    # missing or unverifiable state; otherwise it is a no-op.
+    pixied_state_bootstrap_active_runtime
+    # Reject identity-changing options before any path resolution or state load.
+    pixied_install_assert_active_identity
+
     pixied_options_apply_defaults
     pixied_resolve_paths 0
     pixied_require_cmd bash
@@ -247,6 +254,7 @@ pixied_install() {
         pixied_options_validate_state_transition
         pixied_options_apply_state
         pixied_resolve_paths
+        pixied_state_assert_active_consistency
     else
         # Seed installation defaults from the most recently installed peer
         # machine so a fresh NFS host inherits a consistent configuration.
@@ -261,12 +269,21 @@ pixied_install() {
     pixied_step "Preparing the dedicated Pixi environment for $PIXIED_MACHINE_ID"
     pixied_run mkdir -p -- "$PIXIED_STATE_DIR" "$PIXIED_MACHINE_STATE_DIR" "$PIXIED_CONFIG_DIR"
     pixied_ensure_local_home_bin
-    pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    # Inside an active runtime the launching process already holds the state lock,
+    # so acquiring a fresh lock would fail. Adopt the existing lock instead, and
+    # leave it for the runtime to release on exit. From outside the runtime an
+    # install may still find a stale lock, which must remain a hard error.
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
+        pixied_state_lock_adopt_active
+    else
+        pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    fi
     if [ "$state_exists" -eq 1 ]; then
         pixied_state_load "$PIXIED_STATE_FILE"
         pixied_options_validate_state_transition
         pixied_options_apply_state
         pixied_resolve_paths
+        pixied_state_assert_active_consistency
     else
         pixied_state_initialize_from_paths
     fi
@@ -328,6 +345,9 @@ pixied_install() {
         pixied_info "Created state: $PIXIED_STATE_FILE"
     fi
     pixied_success "Runtime hook, dedicated Pixi environment, and session support are ready"
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
+        pixied_info "Active runtime installation kept the verified identity intact. The current session keeps the previous environment until you restart or re-attach the runtime."
+    fi
     pixied_print_next_steps
 }
 

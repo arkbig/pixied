@@ -72,6 +72,18 @@ machine間で共有または再現されるのは、PixiEdenの設定、固定�
 
 `zellij`ではPixiEden runtime内から`zellij attach --create pixied`を直接実行する。親shellの環境を継承するため、`SSH_AUTH_SOCK`なども利用できる。`none`では専用interactive Bashを起動し、Zellijを起動しない。
 
+## アクティブruntime内の管理操作（受入条件）
+
+専用環境を有効化したshell（アクティブruntime）から`pixied install`/`pixied uninstall`を実行する場合にのみ適用する受入条件である。
+
+- AC-1: アクティブruntimeでは**検証済みstate file**をidentityのsource of truthとし、identityを`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`から再計算しない。
+- AC-2: アクティブruntimeの検出は`PIXIED_RUNTIME_HOOK_ACTIVE=1`と絶対正規化pathである`PIXIED_RUNTIME_STATE_FILE`の両方を要し、いずれか一方だけではアクティブとみなさない。
+- AC-3: state fileが不在または検証不能な場合、install/uninstallは`active runtime state is missing or unverifiable; PixiEden refuses to change identity from an active runtime; re-source the runtime from a valid deployment`を出力して失敗する。
+- AC-4: アクティブruntime内でidentityを変更するoption（`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`）を指定すると、`active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')`を出力して却下する。
+- AC-5: reinstallでsession managerを変更しようとすると`cannot change session manager during reinstall; run uninstall first`を出力して却下し、先にuninstallするよう要求する。
+- AC-6: `zellij`のアクティブruntimeからはuninstallできず、`cannot uninstall from an active Zellij runtime; detach the managed Zellij session (exit the runtime shell) and rerun the uninstall`を出力して却下する。
+- AC-7: install/uninstallは現在のsessionが保持する環境を変えずにstateを更新し、`exit`でruntime shellを抜けたあと再起動または再attachしたruntimeにのみ新しい設定を反映する。
+
 ## トレーサビリティ
 
 目的とスコープは[ユースケース（UC）](use-cases.ja.md)でシステム境界と主要フローに分解する。各UCの価値と検証条件は[ユーザーストーリーと受入条件（US/AC）](user-stories.ja.md)で管理し、選択理由と不採用案は[意思決定記録（ADR）](adr.ja.md)から参照する。

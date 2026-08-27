@@ -16,6 +16,10 @@ declare -ga PIXIED_UNINSTALL_TARGET_PATHS=()
 declare -ga PIXIED_UNINSTALL_TARGET_HASHES=()
 declare -ga PIXIED_UNINSTALL_TARGET_KINDS=()
 declare -ga PIXIED_UNINSTALL_QUARANTINE_PATHS=()
+declare -ga PIXIED_UNINSTALL_OTHER_DATA=()
+declare -ga PIXIED_UNINSTALL_OTHER_CONFIG=()
+declare -ga PIXIED_UNINSTALL_OTHER_COMMAND=()
+declare -ga PIXIED_UNINSTALL_OTHER_PIXI_HOME=()
 PIXIED_UNINSTALL_OTHER_STATE_COUNT=0
 PIXIED_UNINSTALL_SHARED_DATA=0
 PIXIED_UNINSTALL_SHARED_CONFIG=0
@@ -61,6 +65,22 @@ pixied_uninstall_parse() {
 # @exitcode 1 When identity or path resolution fails.
 pixied_uninstall_resolve_identity() {
     local account_home state_home state_dir
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
+        # The verified active state is the identity source of truth. Never
+        # re-derive paths from $HOME, which the runtime may have remapped (for
+        # example, NFS mode sets HOME to the machine-local home).
+        [ -n "${PIXIED_STATE_DIR:-}" ] ||
+            pixied_die "active runtime state directory is not set"
+        [ -n "${PIXIED_MACHINE_STATE_DIR:-}" ] ||
+            pixied_die "active runtime machine state directory is not set"
+        [ -n "${PIXIED_STATE_FILE:-}" ] ||
+            pixied_die "active runtime state file is not set"
+        [ -n "${PIXIED_MACHINE_ID:-}" ] ||
+            pixied_die "active runtime machine id is not set"
+        export PIXIED_ACCOUNT_HOME PIXIED_STATE_DIR PIXIED_MACHINE_ID \
+            PIXIED_MACHINE_STATE_DIR PIXIED_STATE_FILE
+        return 0
+    fi
     account_home=$(pixied_validate_home_directory "${HOME:-}" "account home")
     export PIXIED_ACCOUNT_HOME=$account_home
     state_home=${XDG_STATE_HOME:-$account_home/.local/state}
@@ -151,6 +171,36 @@ pixied_uninstall_paths_overlap() {
     return 1
 }
 
+# @description Reject a full-directory uninstall target that physically contains
+# a managed root owned by another machine state.
+# A full-directory target (the current data directory or pixi home) is removed
+# wholesale, so any other state whose managed root (data, config, command bin, or
+# pixi home) sits strictly inside it would lose that resource even though it is
+# not part of the current machine's deployment. Equality is allowed because an
+# equal root is covered by the shared-resource guard and never becomes a
+# full-directory target.
+#
+# @arg $1 string The full-directory target path.
+# @arg $2 string The target label used in the error message.
+# @exitcode 0 When no other state root is strictly contained.
+# @exitcode 1 When an other state root sits inside the target.
+pixied_uninstall_reject_contained_roots() {
+    local target=$1 label=$2 index root
+    target=$(pixied_canonical_path "$target")
+    for index in "${!PIXIED_UNINSTALL_OTHER_DATA[@]}"; do
+        for root in "${PIXIED_UNINSTALL_OTHER_DATA[$index]}" \
+            "${PIXIED_UNINSTALL_OTHER_CONFIG[$index]}" \
+            "${PIXIED_UNINSTALL_OTHER_COMMAND[$index]}" \
+            "${PIXIED_UNINSTALL_OTHER_PIXI_HOME[$index]}"; do
+            [ -n "$root" ] || continue
+            [ "$root" = "$target" ] && continue
+            case "$root/" in
+            "$target"/*) pixied_die "uninstall $label target contains another machine state resource: $target contains $root" ;;
+            esac
+        done
+    done
+}
+
 # @description Validate state paths and their relationships before any rename.
 # Optional paths are allowed to be absent so an interrupted uninstall can be
 # resumed, but every present managed object must pass ownership and hash checks.
@@ -197,16 +247,11 @@ pixied_uninstall_validate_current_state() {
         pixied_uninstall_require_path_match zellij_path \
             "${PIXIED_STATE[zellij_path]}" "$expected"
     fi
-    case "${PIXIED_STATE[home_mode]}" in
-    local)
-        expected="${PIXIED_STATE[data_dir]}/pixi"
-        pixied_uninstall_require_path_match pixi_home "${PIXIED_STATE[pixi_home]}" "$expected"
-        ;;
-    nfs)
-        expected="${PIXIED_STATE[local_home]}/.local/share/pixied/pixi"
-        pixied_uninstall_require_path_match pixi_home "${PIXIED_STATE[pixi_home]}" "$expected"
-        ;;
-    esac
+    # The pixi home that was recorded in the state is the source of truth,
+    # covering local, nfs, and an explicit --pixi-home uniformly. Recomputing it
+    # from home_mode would reject a custom pixi home during uninstall.
+    expected=$(pixied_canonical_path "${PIXIED_STATE[pixi_home]}")
+    pixied_uninstall_require_path_match pixi_home "${PIXIED_STATE[pixi_home]}" "$expected"
     pixied_uninstall_validate_directory_boundary "${PIXIED_STATE[data_dir]}"
     pixied_uninstall_validate_directory_boundary "${PIXIED_STATE[pixi_home]}"
     for ((root_index = 0; root_index < ${#root_names[@]} - 1; root_index++)); do
@@ -273,6 +318,8 @@ pixied_uninstall_validate_current_state() {
 # @exitcode 1 When another state is malformed or unsafe.
 pixied_uninstall_scan_other_states() {
     local machines_dir machine_dir candidate candidate_name expected key
+    local current_data current_config current_command current_pixi
+    local other_data other_config other_command other_pixi
     local -A seen_machine_ids=()
     machines_dir="${PIXIED_STATE_DIR}/machines"
     PIXIED_UNINSTALL_OTHER_STATE_COUNT=0
@@ -280,9 +327,19 @@ pixied_uninstall_scan_other_states() {
     PIXIED_UNINSTALL_SHARED_CONFIG=0
     PIXIED_UNINSTALL_SHARED_COMMAND=0
     PIXIED_UNINSTALL_SHARED_PIXI_HOME=0
+    PIXIED_UNINSTALL_OTHER_DATA=()
+    PIXIED_UNINSTALL_OTHER_CONFIG=()
+    PIXIED_UNINSTALL_OTHER_COMMAND=()
+    PIXIED_UNINSTALL_OTHER_PIXI_HOME=()
     [ -d "$machines_dir" ] || return 0
     pixied_validate_owned_path "$machines_dir"
     seen_machine_ids["$PIXIED_MACHINE_ID"]=1
+    # Canonicalize the current machine's managed roots once so sibling states are
+    # compared by physical path instead of raw, possibly symlinked, strings.
+    current_data=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[data_dir]}")
+    current_config=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[config_dir]}")
+    current_command=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[command_bin]}")
+    current_pixi=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[pixi_home]}")
 
     for machine_dir in "$machines_dir"/*; do
         [ -e "$machine_dir" ] || [ -L "$machine_dir" ] || continue
@@ -313,18 +370,39 @@ pixied_uninstall_scan_other_states() {
             pixied_die "machine state uses a different state directory: $candidate"
         [ -z "${seen_machine_ids[${PIXIED_STATE[machine_id]}]+present}" ] ||
             pixied_die "duplicate machine state ID: ${PIXIED_STATE[machine_id]}"
-        for key in data_dir config_dir command_bin; do
+        # pixi_home is a core key for every valid state. Requiring it here keeps an
+        # incomplete sibling state from silently participating in shared detection.
+        for key in data_dir config_dir command_bin pixi_home; do
             [ -n "${PIXIED_STATE[$key]:-}" ] ||
                 pixied_die "machine state key is missing: $key"
         done
-        [ "${PIXIED_STATE[data_dir]}" = "${PIXIED_UNINSTALL_CURRENT_STATE[data_dir]}" ] &&
-            PIXIED_UNINSTALL_SHARED_DATA=1
-        [ "${PIXIED_STATE[config_dir]}" = "${PIXIED_UNINSTALL_CURRENT_STATE[config_dir]}" ] &&
-            PIXIED_UNINSTALL_SHARED_CONFIG=1
-        [ "${PIXIED_STATE[command_bin]}" = "${PIXIED_UNINSTALL_CURRENT_STATE[command_bin]}" ] &&
-            PIXIED_UNINSTALL_SHARED_COMMAND=1
-        [ "${PIXIED_STATE[pixi_home]}" = "${PIXIED_UNINSTALL_CURRENT_STATE[pixi_home]}" ] &&
-            PIXIED_UNINSTALL_SHARED_PIXI_HOME=1
+        # An other state must be internally consistent before its shared-resource
+        # claims can be trusted. Overlapping managed roots would make the
+        # shared/non-shared classification ambiguous, so block cleanup.
+        if pixied_uninstall_paths_overlap "${PIXIED_STATE[data_dir]}" \
+            "${PIXIED_STATE[config_dir]}"; then
+            pixied_die "machine state managed roots are inconsistent: $candidate"
+        fi
+        if pixied_uninstall_paths_overlap "${PIXIED_STATE[data_dir]}" \
+            "${PIXIED_STATE[command_bin]}"; then
+            pixied_die "machine state managed roots are inconsistent: $candidate"
+        fi
+        if pixied_uninstall_paths_overlap "${PIXIED_STATE[config_dir]}" \
+            "${PIXIED_STATE[command_bin]}"; then
+            pixied_die "machine state managed roots are inconsistent: $candidate"
+        fi
+        other_data=$(pixied_canonical_path "${PIXIED_STATE[data_dir]}")
+        other_config=$(pixied_canonical_path "${PIXIED_STATE[config_dir]}")
+        other_command=$(pixied_canonical_path "${PIXIED_STATE[command_bin]}")
+        other_pixi=$(pixied_canonical_path "${PIXIED_STATE[pixi_home]}")
+        [ "$other_data" = "$current_data" ] && PIXIED_UNINSTALL_SHARED_DATA=1
+        [ "$other_config" = "$current_config" ] && PIXIED_UNINSTALL_SHARED_CONFIG=1
+        [ "$other_command" = "$current_command" ] && PIXIED_UNINSTALL_SHARED_COMMAND=1
+        [ "$other_pixi" = "$current_pixi" ] && PIXIED_UNINSTALL_SHARED_PIXI_HOME=1
+        PIXIED_UNINSTALL_OTHER_DATA+=("$other_data")
+        PIXIED_UNINSTALL_OTHER_CONFIG+=("$other_config")
+        PIXIED_UNINSTALL_OTHER_COMMAND+=("$other_command")
+        PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("$other_pixi")
         seen_machine_ids["${PIXIED_STATE[machine_id]}"]=1
         PIXIED_UNINSTALL_OTHER_STATE_COUNT=$((PIXIED_UNINSTALL_OTHER_STATE_COUNT + 1))
     done
@@ -378,6 +456,12 @@ pixied_uninstall_prepare_targets() {
         { [ "$full_data" -eq 0 ] || [ "$pixi_nested" -eq 0 ]; }; then
         full_pixi=1
         pixied_uninstall_add_target "${PIXIED_STATE[pixi_home]}" "" dir
+    fi
+    if [ "$full_data" -eq 1 ]; then
+        pixied_uninstall_reject_contained_roots "${PIXIED_STATE[data_dir]}" data_dir
+    fi
+    if [ "$full_pixi" -eq 1 ]; then
+        pixied_uninstall_reject_contained_roots "${PIXIED_STATE[pixi_home]}" pixi_home
     fi
 
     if [ "$PIXIED_UNINSTALL_SHARED_DATA" -eq 0 ] && [ "$full_data" -eq 0 ] &&
@@ -581,7 +665,7 @@ pixied_uninstall_confirm() {
 # @exitcode 0 When no managed session is present or inspection fails.
 # @exitcode 1 When the session is active or state validation fails.
 pixied_uninstall_require_no_active_session() {
-    local session_name sessions line
+    local session_name sessions line message
     [ "${PIXIED_STATE[session_manager]}" = zellij ] || return 0
     pixied_state_has zellij_path || pixied_die "uninstall state is missing Zellij path"
     pixied_state_has zellij_hash || pixied_die "uninstall state is missing Zellij hash"
@@ -594,7 +678,14 @@ pixied_uninstall_require_no_active_session() {
     while IFS= read -r line; do
         case "$line" in
         "$session_name" | "$session_name "*)
-            pixied_die "cannot uninstall while the managed Zellij session is active: $session_name"
+            message="cannot uninstall while the managed Zellij session is active: $session_name"
+            message+=$'\nTo uninstall:'
+            message+=$'\n  1. Verify the session: '
+            message+="${PIXIED_STATE[zellij_path]} list-sessions --no-formatting"
+            message+=$'\n  2. End the session: '
+            message+="${PIXIED_STATE[zellij_path]} delete-session $session_name"
+            message+=$'\n  3. Rerun: pixied uninstall'
+            pixied_die "$message"
             ;;
         esac
     done <<<"$sessions"
@@ -710,15 +801,34 @@ pixied_launcher_generate() {
 # all ownership before confirmation, keep stale quarantine cleanup after
 # confirmation, stop session infrastructure before quarantine, and quarantine
 # the state file last so an interruption leaves a recovery checkpoint.
+#
+# An active runtime bootstraps the verified state file as the identity source
+# of truth, so identity is never re-derived from the (possibly remapped) $HOME.
+# A missing or invalid active state is fatal before any removal. An active
+# Zellij runtime is rejected because the managed session is still attached.
 pixied_uninstall_run() {
     pixied_uninstall_parse "$@"
+    pixied_state_bootstrap_active_runtime
     pixied_uninstall_resolve_identity
-    pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    if [ -z "${PIXIED_STATE_DIR:-}" ] || [ -z "${PIXIED_MACHINE_STATE_DIR:-}" ] ||
+        [ -z "${PIXIED_STATE_FILE:-}" ]; then
+        pixied_die "uninstall identity is incomplete; refusing to remove anything"
+    fi
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
+        pixied_state_lock_adopt_active
+    else
+        pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    fi
     pixied_uninstall_restore_pending_state
     [ -f "$PIXIED_STATE_FILE" ] ||
         pixied_die "PixiEden state is unavailable; refusing to guess what to remove"
     pixied_state_load "$PIXIED_STATE_FILE"
     pixied_uninstall_snapshot_state
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ] &&
+        [ "${PIXIED_STATE[session_manager]:-}" = zellij ] &&
+        [ -n "${ZELLIJ:-}" ]; then
+        pixied_die "cannot uninstall from an attached Zellij runtime session; detach the managed Zellij session (exit the session) and rerun the uninstall"
+    fi
     pixied_uninstall_validate_current_state
     pixied_uninstall_scan_other_states
     pixied_uninstall_restore_state
@@ -729,4 +839,7 @@ pixied_uninstall_run() {
     pixied_step "Removing the PixiEden installation for $PIXIED_MACHINE_ID"
     pixied_uninstall_quarantine_targets
     pixied_success "PixiEden installation removed for $PIXIED_MACHINE_ID"
+    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
+        pixied_info "The active runtime shell still holds the previous environment. Run 'exit' to leave this runtime shell, then restart or re-attach the runtime to use the account without PixiEden."
+    fi
 }

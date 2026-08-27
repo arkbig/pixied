@@ -166,3 +166,23 @@ Release tagをスクリプトでPIXIED_VERSIONと一致させる
 
 - 別管理の`VERSION`ファイルを導入する案: バージョン情報が複数箇所に分かれ、更新漏れで同一バージョンの再リリースが起きる。
 - ドキュメントへの注意書きだけで防ぐ案: 手動手順に依存し、バージョン更新忘れや既存タグの上書きを検出できない。
+
+## ADR-009
+
+アクティブruntimeのidentityは検証済みstate fileをsource of truthとする
+
+**Status**: Accepted
+
+### Context
+
+専用環境を有効化したruntime shellから`pixied install`/`pixied uninstall`を実行するとき、NFS modeでは`$HOME`がmachine-local homeへremapされる。このため`$HOME`や環境変数`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からidentityを再計算すると、実際のdeploymentと一致しない別machine/別homeの設定を当てがう事故が起きる。
+
+### Decision
+
+アクティブruntime（runtime hookが`PIXIED_RUNTIME_HOOK_ACTIVE=1`と絶対正規化pathの`PIXIED_RUNTIME_STATE_FILE`を両方設定した状態）の管理操作では、runtimeがsourceした検証済みstate fileをidentityのsource of truthとする。`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からはidentityを再計算しない。state fileが不在または検証不能な場合は管理操作を拒否し、identity変更optionやreinstallでのsession manager変更、`zellij`のアクティブruntimeからのuninstallを却下する。install/uninstallはstateを更新するだけで現在のsession環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。
+
+### Rejected alternatives
+
+- `$HOME`と環境変数からidentityを再計算する案: NFS modeで`$HOME`がremapされるため、誤ったidentityを当てがう。
+- アクティブruntimeの検出を単一の環境変数のみで判定する案: 片方だけの設定（hook漏れや変数の残存）で誤検出し、検証されていないstateをsource of truthとして扱う。
+- アクティブruntimeでもidentity変更optionを許可する案: 実行中sessionが保持する環境とstateが一致しなくなり、再attach時に不整合が残る。
