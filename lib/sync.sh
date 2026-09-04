@@ -17,7 +17,6 @@ readonly PIXIED_SYNC_ALLOWLIST=(
     .bashrc .bash_profile .profile .bash_logout
     .zshrc .zprofile .zlogin .zlogout
 )
-PIXIED_SYNC_LOCK_HELD=0
 
 # @description Return whether allowlist synchronization is enabled.
 # @exitcode 0 When the runtime is in NFS home mode.
@@ -222,74 +221,58 @@ pixied_sync_reconcile() {
     done
 }
 
-# @description Pull and reconcile the fixed allowlist before a runtime starts.
-# @exitcode 0 When synchronization is disabled or reconciliation succeeds.
-# @exitcode 1 When synchronization cannot be completed.
-pixied_sync_pull() {
-    pixied_sync_enabled || return 0
-    pixied_sync_reconcile
-}
-
-# @description Push and reconcile the fixed allowlist after a clean runtime exit.
-# @exitcode 0 When synchronization is disabled or reconciliation succeeds.
-# @exitcode 1 When synchronization cannot be completed.
-pixied_sync_push() {
-    pixied_sync_enabled || return 0
-    pixied_sync_reconcile
-}
-
-# @description Acquire the runtime lock and perform the NFS pull when enabled.
-# The lock remains held across every child process, including local mode, so
-# start and uninstall cannot remove a runtime while it is still executing.
+# @description Attempt to acquire the short state lock without dying.
+# Mirrors pixied_state_lock_acquire but reports contention through the exit
+# status instead of a fatal error, so a runtime start can retry. A successful
+# acquire records the lock directory in PIXIED_STATE_LOCK_DIR for cleanup.
 #
-# @set PIXIED_SYNC_LOCK_HELD integer Whether the runtime sync lock is held.
-# @exitcode 0 When synchronization is disabled or the pull succeeds.
-# @exitcode 1 When the lock or pull fails.
-pixied_sync_runtime_begin() {
-    PIXIED_SYNC_LOCK_HELD=0
-    pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
-    PIXIED_SYNC_LOCK_HELD=1
-    pixied_sync_enabled || return 0
-    pixied_sync_pull
+# @arg $1 string The lock directory path.
+# @set PIXIED_STATE_LOCK_DIR string The path of the acquired lock directory.
+# @exitcode 0 When the lock was acquired.
+# @exitcode 1 When the lock already exists.
+pixied_sync_try_lock() {
+    local lock_dir=$1 parent
+    parent=${lock_dir%/*}
+    [ -d "$parent" ] || pixied_die "state lock parent does not exist: $parent"
+    pixied_validate_owned_path "$parent"
+    if [ -e "$lock_dir" ]; then
+        return 1
+    fi
+    pixied_run mkdir -- "$lock_dir" || return 1
+    if ! pixied_run chmod 0700 -- "$lock_dir"; then
+        pixied_run rmdir -- "$lock_dir"
+        pixied_die "could not protect state lock: $lock_dir"
+    fi
+    # shellcheck disable=SC2034 # Read by pixied_state_lock_release and pixied_cleanup.
+    PIXIED_STATE_LOCK_DIR=$lock_dir
 }
 
-# @description Finish runtime synchronization and release the lock.
-# Push is permitted only for a successful child and an attach flow known not
-# to leave a resident Zellij session.
+# @description Reconcile the allowlist under a short-lived state lock.
+# Called once at runtime start. Synchronization is skipped when disabled. The
+# short lock is acquired with a bounded retry (0.1s x up to 10 attempts) so a
+# concurrent install/uninstall or another runtime start briefly holding the
+# lock does not fail this start. When the lock cannot be acquired in time, a
+# warning is emitted and synchronization is skipped. Acquisition, reconciliation,
+# and release are a straight line so the EXIT-trap cleanup releases the lock
+# even if reconciliation fails. Reconciliation runs again on the next start.
 #
-# @arg $1 integer The child or attach exit status.
-# @arg $2 integer Whether the runtime flow permits a clean-exit push.
-# @exitcode The original child status, unless push fails fatally.
-pixied_sync_runtime_finish() {
-    local child_status=$1 push_allowed=${2:-0}
-    if [ "$PIXIED_SYNC_LOCK_HELD" -eq 1 ]; then
-        if [ "$child_status" -eq 0 ] && [ "$push_allowed" -eq 1 ]; then
-            pixied_sync_push
-        elif [ "$child_status" -ne 0 ]; then
-            pixied_warn "skipping sync push because the child exited with status $child_status"
-        else
-            pixied_warn "skipping sync push because the runtime session is still present"
+# @exitcode 0 Always; a skipped synchronization is treated as success.
+# @see pixied_sync_reconcile
+# @see pixied_state_lock_acquire
+pixied_sync_reconcile_guarded() {
+    pixied_sync_enabled || return 0
+    local lock_dir attempt
+    lock_dir=$(pixied_state_lock_path)
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if pixied_sync_try_lock "$lock_dir"; then
+            break
         fi
-        pixied_state_lock_release
-        PIXIED_SYNC_LOCK_HELD=0
-    fi
-    return "$child_status"
-}
-
-# @description Check whether a named Zellij session remains after attach returns.
-# @arg $1 string The expected Zellij session name.
-# @exitcode 0 When the session is still present.
-# @exitcode 1 When the session is absent.
-# @exitcode 2 When the session list cannot be inspected.
-pixied_sync_zellij_session_status() {
-    local session_name=$1 sessions line
-    if ! sessions=$(pixied_run "$PIXIED_ZELLIJ_PATH" list-sessions --no-formatting 2>/dev/null); then
-        return 2
-    fi
-    while IFS= read -r line; do
-        case "$line" in
-        "$session_name" | "$session_name "*) return 0 ;;
-        esac
-    done <<<"$sessions"
-    return 1
+        [ "$attempt" -lt 10 ] || {
+            pixied_warn "another PixiEden state operation still holds the state lock; skipping this start's synchronization and continuing. Synchronization runs again on the next start."
+            return 0
+        }
+        pixied_run sleep 0.1
+    done
+    pixied_sync_reconcile
+    pixied_state_lock_release
 }

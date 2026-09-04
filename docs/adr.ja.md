@@ -186,3 +186,23 @@ Release tagをスクリプトでPIXIED_VERSIONと一致させる
 - `$HOME`と環境変数からidentityを再計算する案: NFS modeで`$HOME`がremapされるため、誤ったidentityを当てがう。
 - アクティブruntimeの検出を単一の環境変数のみで判定する案: 片方だけの設定（hook漏れや変数の残存）で誤検出し、検証されていないstateをsource of truthとして扱う。
 - アクティブruntimeでもidentity変更optionを許可する案: 実行中sessionが保持する環境とstateが一致しなくなり、再attach時に不整合が残る。
+
+## ADR-010
+
+NFSのstate registryとruntime payloadを分離する
+
+**Status**: Accepted
+
+### Context
+
+account homeはmachine間で共有される一方、Pixiのdata、config、cache、lock、Zellij sessionはmachineごとに独立して扱う必要がある。同じlocal home文字列がhostごとに異なるlocal filesystemを指す場合、path文字列の一致だけでは共有resourceと判定できない。
+
+### Decision
+
+NFSでは`state_dir`とaccount側の`command_bin/pixied`だけを共有領域に置く。state fileは`machines/<machine-id>/state`へ分離し、data/config/専用`PIXI_HOME`とlockは`PIXIED_LOCAL_HOME`側へ配置する。共有launcherはcurrent machineのstateを読み、そのstateのlocal payloadへdispatchする。peer stateから`local_home`は継承しない。旧layoutのstateはshared runtimeを継続利用せず、uninstall後の再installを要求する。
+
+### Rejected alternatives
+
+- account homeのdata/configを共有し続ける案: machine間のruntime payloadとlockが同じ実体になり、独立性を保証できない。
+- stateとpayloadを同じ共有directoryに置く案: lock競合とlocal filesystemの性能問題をruntimeから分離できない。
+- peerの`local_home`を既定値として継承する案: 別hostのlocal filesystemを誤って参照する。

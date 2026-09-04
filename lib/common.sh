@@ -179,8 +179,10 @@ pixied_temp_dir() {
 
 # @description Remove all registered temporary paths and reset the state.
 # If a state lock is held, releases it by calling pixied_state_lock_release.
+# If a runtime lease is held, releases it by calling pixied_lease_release.
 #
 # @see pixied_state_lock_release
+# @see pixied_lease_release
 pixied_cleanup() {
     local path
     for path in "${PIXIED_TEMP_PATHS[@]}"; do
@@ -192,6 +194,10 @@ pixied_cleanup() {
     if [ -n "${PIXIED_STATE_LOCK_DIR:-}" ] &&
         declare -F pixied_state_lock_release >/dev/null 2>&1; then
         pixied_state_lock_release
+    fi
+    if [ -n "${PIXIED_LEASE_FILE:-}" ] &&
+        declare -F pixied_lease_release >/dev/null 2>&1; then
+        pixied_lease_release
     fi
 }
 

@@ -73,9 +73,9 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
 |`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
 
-installはaccount home、home mode、local home、XDG pathを副作用の前に解決する。`nfs`modeではPixi dataとcacheをlocal home側の専用`PIXI_HOME`へ置き、`local`modeでは専用data directory配下へ置く。すべてのPixi呼び出しは専用binaryを絶対pathで実行し、runtime内で専用`PIXI_HOME`、`PIXI_CACHE_DIR`、`PIXI_NO_PATH_UPDATE=1`を設定する。利用者の通常のPixi、通常の`PIXI_HOME`、通常のPATHはこの境界の外にある。
+installはaccount home、home mode、local home、XDG pathを副作用の前に解決する。`nfs`modeではPixi data、config、cache、lockをlocal home側へ置き、`local`modeでは専用data directory配下へ置く。state registryとaccount側launcherだけは共有し、launcherはcurrent machineのstateからlocal payloadへdispatchする。すべてのPixi呼び出しは専用binaryを絶対pathで実行し、runtime内で専用`PIXI_HOME`、`PIXI_CACHE_DIR`、`PIXI_NO_PATH_UPDATE=1`を設定する。利用者の通常のPixi、通常の`PIXI_HOME`、通常のPATHはこの境界の外にある。
 
-machine stateは`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存する。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。既存資源をstateなしまたはhash不一致のまま引き継がず、未管理の既存Pixi pathへのGlobal provisionも行わない。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。
+machine stateは共有registry内の`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存し、lockはNFSではmachine state directory内、local modeではstate root内に保存する。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。既存資源をstateなしまたはhash不一致のまま引き継がず、未管理の既存Pixi pathへのGlobal provisionも行わない。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。旧NFS layoutのstateはshared payloadを継続利用せず、uninstall後の再installを要求する。
 
 runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。hookの評価でnetwork、Pixi Global変更、NFS同期全体を実行しない。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、NFS modeのpullと、status `0`で終わった場合だけpushを行う。signal、失敗、lock取得失敗時はpushしない。
 

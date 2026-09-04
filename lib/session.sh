@@ -303,43 +303,51 @@ pixied_runtime_wait_for_child() {
     return "$child_status"
 }
 
-# @description Run a child and finish synchronization using its exit status.
-# The child is allowed to push only after a successful exit.
+# @description Run a child process and return its exit status.
+# Runtime synchronization is complete before the child starts; the runtime
+# holds no state lock while waiting for the child, so no finish step remains.
 #
 # @arg $@ string The child command and arguments.
-# @exitcode The child or synchronization exit status.
+# @exitcode The child exit status.
 pixied_runtime_run_child() {
-    local child_status finish_status
-    if pixied_runtime_wait_for_child "$@"; then
-        child_status=$PIXIED_EXIT_OK
-    else
-        child_status=$?
-    fi
-    if pixied_sync_runtime_finish "$child_status" 1; then
-        return "$PIXIED_EXIT_OK"
-    else
-        finish_status=$?
-        return "$finish_status"
-    fi
+    pixied_runtime_wait_for_child "$@"
 }
 
 # @description Prepare the runtime before running a command or session.
+# Synchronizes under a short-lived lock (never held across the child) and
+# exports the runtime environment. Each entry point acquires its own runtime
+# lease after this call.
+#
 # @exitcode 0 When the runtime is ready.
+# @see pixied_lease_acquire
 pixied_runtime_prepare() {
     pixied_runtime_load_state
     pixied_ensure_local_home_bin
     pixied_runtime_export_environment
-    pixied_sync_runtime_begin
+    pixied_sync_reconcile_guarded
 }
 
 # @description Run a command directly in the prepared PixiEden runtime.
+# A runtime lease is acquired for this process so other pixied operations can
+# observe liveness; a sibling runtime's lease never blocks this start.
 #
 # @arg $@ string The command and arguments.
 # @exitcode 0 When the child exits successfully.
 # @exitcode The child exit status, including 128 plus the signal number when
 # the process was terminated by a signal.
 pixied_runtime_run() {
+    local lease_args="" word taken=0
     pixied_runtime_prepare
+    for word in "$@"; do
+        [ "$taken" -lt 4 ] || break
+        if [ -n "$lease_args" ]; then
+            lease_args+=" $word"
+        else
+            lease_args=$word
+        fi
+        taken=$((taken + 1))
+    done
+    pixied_lease_acquire run "$lease_args"
     pixied_runtime_run_child "$@"
 }
 
@@ -349,18 +357,22 @@ pixied_runtime_run() {
 # environment variable or the --auto-attach flag overrides the auto-attach:
 # when the mode is none the runtime starts an interactive Bash without creating
 # or attaching to a Zellij session, so the session can be attached manually.
+# A runtime lease is acquired for this process; a sibling runtime's lease never
+# blocks this start, and a second Zellij shell relies on 'attach --create' to
+# join or share the existing session.
 #
 # @exitcode 0 When the child shell or attach process exits successfully.
 # @exitcode The child or attach process exit status, including 128 plus the
 # signal number when the process was terminated by a signal.
 pixied_runtime_shell() {
-    local session_name child_status push_allowed=1 session_status
+    local session_name
     if [ "${PIXIED_RUNTIME_HOOK_ACTIVE:-0}" -eq 1 ] &&
         [ "${PIXIED_RUNTIME_HOOK_AUTOSTART:-0}" -ne 1 ]; then
         pixied_die "PixiEden is already active in this shell; use exit to leave it" \
             "$PIXIED_EXIT_FAILURE"
     fi
     pixied_runtime_prepare
+    pixied_lease_acquire shell ""
 
     pixied_require_tty
     if [ "${PIXIED_AUTO_ATTACH:-auto}" = none ]; then
@@ -376,26 +388,5 @@ pixied_runtime_shell() {
     fi
 
     session_name=pixied
-    if pixied_runtime_wait_for_child "$PIXIED_ZELLIJ_PATH" attach --create "$session_name"; then
-        child_status=$PIXIED_EXIT_OK
-    else
-        child_status=$?
-    fi
-    if [ "$child_status" -eq "$PIXIED_EXIT_OK" ]; then
-        if pixied_sync_zellij_session_status "$session_name"; then
-            push_allowed=0
-            pixied_warn "skipping sync push because Zellij session remains: $session_name"
-        else
-            session_status=$?
-            if [ "$session_status" -eq 2 ]; then
-                push_allowed=0
-                pixied_warn "skipping sync push because Zellij session status is unavailable"
-            fi
-        fi
-    fi
-    if pixied_sync_runtime_finish "$child_status" "$push_allowed"; then
-        return "$PIXIED_EXIT_OK"
-    else
-        return $?
-    fi
+    pixied_runtime_wait_for_child "$PIXIED_ZELLIJ_PATH" attach --create "$session_name"
 }

@@ -28,20 +28,24 @@ PIXIED_UNINSTALL_SHARED_PIXI_HOME=0
 PIXIED_UNINSTALL_QUARANTINE_COUNTER=0
 
 # @description Parse the arguments accepted by uninstall.
-# Only confirmation control is accepted; installation options cannot redirect
-# an uninstall to a different resource set.
+# Only confirmation control and the force flag are accepted; installation
+# options cannot redirect an uninstall to a different resource set.
 #
 # @arg $@ string Uninstall arguments.
 # @set PIXIED_INSTALL_ASSUME_YES integer Whether confirmation is skipped.
+# @set PIXIED_UNINSTALL_FORCE integer Whether active-lease and resident-session
+# checks are downgraded to warnings.
 # @exitcode 0 When arguments are valid.
 # @exitcode 2 When an argument is unknown or malformed.
 pixied_uninstall_parse() {
     local option
     PIXIED_INSTALL_ASSUME_YES=${PIXIED_INSTALL_ASSUME_YES:-0}
+    PIXIED_UNINSTALL_FORCE=${PIXIED_UNINSTALL_FORCE:-0}
     while [ "$#" -gt 0 ]; do
         option=$1
         case "$option" in
         --yes) PIXIED_INSTALL_ASSUME_YES=1 ;;
+        --force) PIXIED_UNINSTALL_FORCE=1 ;;
         --*) pixied_die "unknown uninstall option: $option" "$PIXIED_EXIT_USAGE" ;;
         *) pixied_die "unexpected uninstall argument: $option" "$PIXIED_EXIT_USAGE" ;;
         esac
@@ -50,6 +54,10 @@ pixied_uninstall_parse() {
     case "$PIXIED_INSTALL_ASSUME_YES" in
     0 | 1) export PIXIED_INSTALL_ASSUME_YES ;;
     *) pixied_die "invalid --yes setting" "$PIXIED_EXIT_USAGE" ;;
+    esac
+    case "$PIXIED_UNINSTALL_FORCE" in
+    0 | 1) export PIXIED_UNINSTALL_FORCE ;;
+    *) pixied_die "invalid --force setting" "$PIXIED_EXIT_USAGE" ;;
     esac
 }
 
@@ -171,6 +179,27 @@ pixied_uninstall_paths_overlap() {
     return 1
 }
 
+# @description Check whether a managed root belongs to an NFS machine-local home.
+# Path equality alone cannot prove that two NFS hosts share a filesystem: the
+# same local-home string can name a different local filesystem on each host.
+#
+# @arg $1 string The managed root path.
+# @arg $2 string The state home mode.
+# @arg $3 string The state local home path.
+# @exitcode 0 When the root is strictly below an NFS local home.
+# @exitcode 1 When the root is shared or the state is not NFS.
+pixied_uninstall_path_is_machine_local() {
+    local path=$1 home_mode=$2 local_home=$3
+    [ "$home_mode" = nfs ] || return 1
+    path=$(pixied_canonical_path "$path")
+    local_home=$(pixied_canonical_path "$local_home")
+    [ "$path" != "$local_home" ] || return 1
+    case "$path/" in
+    "$local_home/"*) return 0 ;;
+    esac
+    return 1
+}
+
 # @description Reject a full-directory uninstall target that physically contains
 # a managed root owned by another machine state.
 # A full-directory target (the current data directory or pixi home) is removed
@@ -285,7 +314,11 @@ pixied_uninstall_validate_current_state() {
         checks+=("${PIXIED_STATE[runtime_hook_path]}|file|${PIXIED_STATE[runtime_hook_hash]}")
     fi
     if pixied_state_has launcher_path && pixied_state_has launcher_hash; then
-        checks+=("${PIXIED_STATE[launcher_path]}|file|${PIXIED_STATE[launcher_hash]}")
+        checks+=(
+            "${PIXIED_STATE[launcher_path]}|file|$(pixied_launcher_uninstall_hash \
+                "${PIXIED_STATE[launcher_path]}" "${PIXIED_STATE[launcher_hash]}" \
+                "${PIXIED_STATE[home_mode]}" "${PIXIED_STATE[state_dir]}")"
+        )
     fi
     checks+=("${PIXIED_STATE[sync_baseline]}|file" "${PIXIED_STATE_FILE}|file")
 
@@ -318,7 +351,9 @@ pixied_uninstall_validate_current_state() {
 # @exitcode 1 When another state is malformed or unsafe.
 pixied_uninstall_scan_other_states() {
     local machines_dir machine_dir candidate candidate_name expected key
+    local current_home_mode current_local_home
     local current_data current_config current_command current_pixi
+    local other_home_mode other_local_home
     local other_data other_config other_command other_pixi
     local -A seen_machine_ids=()
     machines_dir="${PIXIED_STATE_DIR}/machines"
@@ -336,6 +371,8 @@ pixied_uninstall_scan_other_states() {
     seen_machine_ids["$PIXIED_MACHINE_ID"]=1
     # Canonicalize the current machine's managed roots once so sibling states are
     # compared by physical path instead of raw, possibly symlinked, strings.
+    current_home_mode=${PIXIED_UNINSTALL_CURRENT_STATE[home_mode]}
+    current_local_home=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[local_home]}")
     current_data=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[data_dir]}")
     current_config=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[config_dir]}")
     current_command=$(pixied_canonical_path "${PIXIED_UNINSTALL_CURRENT_STATE[command_bin]}")
@@ -391,18 +428,53 @@ pixied_uninstall_scan_other_states() {
             "${PIXIED_STATE[command_bin]}"; then
             pixied_die "machine state managed roots are inconsistent: $candidate"
         fi
+        other_home_mode=${PIXIED_STATE[home_mode]}
+        other_local_home=$(pixied_canonical_path "${PIXIED_STATE[local_home]}")
         other_data=$(pixied_canonical_path "${PIXIED_STATE[data_dir]}")
         other_config=$(pixied_canonical_path "${PIXIED_STATE[config_dir]}")
         other_command=$(pixied_canonical_path "${PIXIED_STATE[command_bin]}")
         other_pixi=$(pixied_canonical_path "${PIXIED_STATE[pixi_home]}")
-        [ "$other_data" = "$current_data" ] && PIXIED_UNINSTALL_SHARED_DATA=1
-        [ "$other_config" = "$current_config" ] && PIXIED_UNINSTALL_SHARED_CONFIG=1
+        if ! pixied_uninstall_path_is_machine_local "$current_data" \
+            "$current_home_mode" "$current_local_home" &&
+            ! pixied_uninstall_path_is_machine_local "$other_data" \
+                "$other_home_mode" "$other_local_home" &&
+            [ "$other_data" = "$current_data" ]; then
+            PIXIED_UNINSTALL_SHARED_DATA=1
+        fi
+        if ! pixied_uninstall_path_is_machine_local "$current_config" \
+            "$current_home_mode" "$current_local_home" &&
+            ! pixied_uninstall_path_is_machine_local "$other_config" \
+                "$other_home_mode" "$other_local_home" &&
+            [ "$other_config" = "$current_config" ]; then
+            PIXIED_UNINSTALL_SHARED_CONFIG=1
+        fi
         [ "$other_command" = "$current_command" ] && PIXIED_UNINSTALL_SHARED_COMMAND=1
-        [ "$other_pixi" = "$current_pixi" ] && PIXIED_UNINSTALL_SHARED_PIXI_HOME=1
-        PIXIED_UNINSTALL_OTHER_DATA+=("$other_data")
-        PIXIED_UNINSTALL_OTHER_CONFIG+=("$other_config")
+        if ! pixied_uninstall_path_is_machine_local "$current_pixi" \
+            "$current_home_mode" "$current_local_home" &&
+            ! pixied_uninstall_path_is_machine_local "$other_pixi" \
+                "$other_home_mode" "$other_local_home" &&
+            [ "$other_pixi" = "$current_pixi" ]; then
+            PIXIED_UNINSTALL_SHARED_PIXI_HOME=1
+        fi
+        if pixied_uninstall_path_is_machine_local "$other_data" \
+            "$other_home_mode" "$other_local_home"; then
+            PIXIED_UNINSTALL_OTHER_DATA+=("")
+        else
+            PIXIED_UNINSTALL_OTHER_DATA+=("$other_data")
+        fi
+        if pixied_uninstall_path_is_machine_local "$other_config" \
+            "$other_home_mode" "$other_local_home"; then
+            PIXIED_UNINSTALL_OTHER_CONFIG+=("")
+        else
+            PIXIED_UNINSTALL_OTHER_CONFIG+=("$other_config")
+        fi
         PIXIED_UNINSTALL_OTHER_COMMAND+=("$other_command")
-        PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("$other_pixi")
+        if pixied_uninstall_path_is_machine_local "$other_pixi" \
+            "$other_home_mode" "$other_local_home"; then
+            PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("")
+        else
+            PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("$other_pixi")
+        fi
         seen_machine_ids["${PIXIED_STATE[machine_id]}"]=1
         PIXIED_UNINSTALL_OTHER_STATE_COUNT=$((PIXIED_UNINSTALL_OTHER_STATE_COUNT + 1))
     done
@@ -438,7 +510,7 @@ pixied_uninstall_add_target() {
 # @exitcode 0 When the target list is safe to execute.
 # @exitcode 1 When state values cannot form a safe target list.
 pixied_uninstall_prepare_targets() {
-    local full_data=0 full_pixi=0 pixi_nested=0
+    local full_data=0 full_pixi=0 pixi_nested=0 launcher_hash
     PIXIED_UNINSTALL_TARGET_PATHS=()
     PIXIED_UNINSTALL_TARGET_HASHES=()
     PIXIED_UNINSTALL_TARGET_KINDS=()
@@ -488,11 +560,19 @@ pixied_uninstall_prepare_targets() {
         fi
         if [ "$PIXIED_UNINSTALL_SHARED_COMMAND" -eq 0 ] &&
             pixied_state_has launcher_path && pixied_state_has launcher_hash; then
+            launcher_hash=$(pixied_launcher_uninstall_hash \
+                "${PIXIED_STATE[launcher_path]}" "${PIXIED_STATE[launcher_hash]}" \
+                "${PIXIED_STATE[home_mode]}" "${PIXIED_STATE[state_dir]}")
             pixied_uninstall_add_target "${PIXIED_STATE[launcher_path]}" \
-                "${PIXIED_STATE[launcher_hash]}" file
+                "$launcher_hash" file
         fi
     fi
     pixied_uninstall_add_target "${PIXIED_STATE[sync_baseline]}" "" file
+    local lease_dir
+    lease_dir=$(pixied_lease_dir)
+    if [ -e "$lease_dir" ] || [ -L "$lease_dir" ]; then
+        pixied_uninstall_add_target "$lease_dir" "" dir
+    fi
     pixied_uninstall_add_target "$PIXIED_STATE_FILE" "" file
 }
 
@@ -662,8 +742,10 @@ pixied_uninstall_confirm() {
 # @description Refuse to remove resources while the managed Zellij session exists.
 # Direct attach leaves the session resident. If the session list is unavailable,
 # warn and continue because the user explicitly requested the uninstall.
-# @exitcode 0 When no managed session is present or inspection fails.
-# @exitcode 1 When the session is active or state validation fails.
+# With --force the resident-session refusal is downgraded to a warning so the
+# uninstall proceeds; the session then keeps using files that were removed.
+# @exitcode 0 When no managed session is present, inspection fails, or --force.
+# @exitcode 1 When the session is active without --force or state validation fails.
 pixied_uninstall_require_no_active_session() {
     local session_name sessions line message
     [ "${PIXIED_STATE[session_manager]}" = zellij ] || return 0
@@ -678,6 +760,10 @@ pixied_uninstall_require_no_active_session() {
     while IFS= read -r line; do
         case "$line" in
         "$session_name" | "$session_name "*)
+            if [ "${PIXIED_UNINSTALL_FORCE:-0}" = 1 ]; then
+                pixied_warn "uninstalling with --force while the managed Zellij session 'pixied' is still active; the session keeps using files that were just removed, so end it with: zellij delete-session pixied"
+                return 0
+            fi
             message="cannot uninstall while the managed Zellij session is active: $session_name"
             message+=$'\nTo uninstall:'
             message+=$'\n  1. Verify the session: '
@@ -689,6 +775,128 @@ pixied_uninstall_require_no_active_session() {
             ;;
         esac
     done <<<"$sessions"
+}
+
+# @description Refuse to uninstall while another runtime holds a live lease.
+# Scans the alive leases recorded by a preceding pixied_lease_sweep, excluding
+# this process and its ancestor chain (a runtime uninstalling itself is
+# allowed). With --force the refusal is downgraded to a warning and the
+# uninstall proceeds.
+#
+# Entry condition: call right after pixied_lease_sweep so PIXIED_LEASE_ACTIVE_LIST
+# reflects the current leases.
+#
+# @set PIXIED_UNINSTALL_FORCE integer Read to decide whether to downgrade.
+# @exitcode 0 When no foreign lease is active or --force is set.
+# @exitcode 1 When a foreign runtime lease is active without --force.
+# @see pixied_lease_sweep
+# @see pixied_lease_other_active
+pixied_uninstall_require_no_active_lease() {
+    local message
+    pixied_lease_other_active >/dev/null
+    [ "${PIXIED_LEASE_OTHER_COUNT:-0}" -eq 0 ] && return 0
+    if [ "${PIXIED_UNINSTALL_FORCE:-0}" = 1 ]; then
+        message="uninstalling with --force while PixiEden runtimes are active:"
+        message+=$'\n'
+        message+=$(pixied_lease_format_entries)
+        message+=$'\nThe listed runtimes may keep using files that were just removed; exit them now.'
+        pixied_warn "$message"
+        return 0
+    fi
+    message="cannot uninstall while another PixiEden runtime is active on this machine:"
+    message+=$'\n'
+    message+=$(pixied_lease_format_entries)
+    message+=$'\nThe listed runtimes are using the managed files that uninstall removes.'
+    message+=$'\nTo uninstall:'
+    message+=$'\n  1. Exit the listed runtime shells, or wait for the listed commands to finish.'
+    message+=$'\n  2. Rerun: pixied uninstall'
+    message+=$'\nTo remove the installation anyway while runtimes stay active, rerun with --force:'
+    message+=$'\n  pixied uninstall --force'
+    message+=$'\n--force still asks for the final confirmation unless you also pass --yes.'
+    pixied_die "$message"
+}
+
+# @description Print the canonical NFS dispatcher content for a state registry.
+# The dispatcher resolves the current machine state at invocation time, so the
+# shared account-side launcher never embeds a machine-local payload path.
+#
+# @arg $1 string The canonical shared state directory.
+# @stdout The dispatcher shell script without a trailing newline.
+# @exitcode 0 Always.
+pixied_launcher_nfs_dispatcher_content() {
+    local state_root=$1 state_root_literal content
+    printf -v state_root_literal '%q' "$state_root"
+    content="#!/usr/bin/env bash"$'\n'
+    content+="set -Eeuo pipefail"$'\n'
+    content+="state_root=$state_root_literal"$'\n'
+    content+='machine_id=${PIXIED_MACHINE_ID:-}'$'\n'
+    content+='if [ -z "$machine_id" ]; then'$'\n'
+    content+='    if [ -r /etc/machine-id ]; then'$'\n'
+    content+='        IFS= read -r machine_id </etc/machine-id || true'$'\n'
+    content+='    else'$'\n'
+    content+='        identity_source="${HOSTNAME:-$(uname -n)}|${PIXIED_ACCOUNT_HOME:-${HOME:-}}|$(id -un)"'$'\n'
+    content+='        machine_id="fallback-$(printf "%s" "$identity_source" | sha256sum | cut -d" " -f1)"'$'\n'
+    content+='    fi'$'\n'
+    content+='fi'$'\n'
+    content+='case "$machine_id" in'$'\n'
+    content+="'' | .* | *[!A-Za-z0-9._-]*) printf '%s\\n' '[pixied] ERROR invalid machine ID.' >&2; exit 1 ;;"$'\n'
+    content+='esac'$'\n'
+    content+='state_file="$state_root/machines/$machine_id/state"'$'\n'
+    content+='[ -f "$state_file" ] || { printf "%s\\n" "[pixied] ERROR state is unavailable for this machine: $machine_id" >&2; exit 1; }'$'\n'
+    content+='home_mode=""'$'\n'
+    content+='command_bin=""'$'\n'
+    content+='data_dir=""'$'\n'
+    content+='while IFS="=" read -r state_key state_value; do'$'\n'
+    content+='    case "$state_key" in home_mode) home_mode=$state_value ;; command_bin) command_bin=$state_value ;; data_dir) data_dir=$state_value ;; esac'$'\n'
+    content+='done < "$state_file"'$'\n'
+    content+='case "$home_mode" in local | nfs) ;; *) printf "%s\\n" "[pixied] ERROR state home mode is invalid." >&2; exit 1 ;; esac'$'\n'
+    content+='case "$command_bin" in'$'\n'
+    content+='    /*) ;;'$'\n'
+    content+='    *) printf "%s\\n" "[pixied] ERROR state command directory is invalid." >&2; exit 1 ;;'$'\n'
+    content+='esac'$'\n'
+    content+='case "$data_dir" in'$'\n'
+    content+='    /*) ;;'$'\n'
+    content+='    *) printf "%s\\n" "[pixied] ERROR state data directory is invalid." >&2; exit 1 ;;'$'\n'
+    content+='esac'$'\n'
+    content+='[ -x "$data_dir/bin/pixied" ] || { printf "%s\\n" "[pixied] ERROR local PixiEden CLI is unavailable: $data_dir/bin/pixied" >&2; exit 1; }'$'\n'
+    content+='export PIXIED_STATE_DIR="$state_root" PIXIED_MACHINE_ID="$machine_id" PIXIED_HOME_MODE="$home_mode" PIXIED_COMMAND_BIN="$command_bin"'$'\n'
+    content+='exec "$data_dir/bin/pixied" "$@"'$'\n'
+    printf '%s' "$content"
+}
+
+# @description Check whether a launcher exactly matches the canonical NFS dispatcher.
+#
+# @arg $1 string The launcher path.
+# @arg $2 string The canonical shared state directory.
+# @exitcode 0 When the launcher content matches.
+# @exitcode 1 When the launcher is not the canonical dispatcher.
+pixied_launcher_nfs_dispatcher_matches() {
+    local path=$1 state_dir=$2 expected actual
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    [ -r "$path" ] || return 1
+    expected=$(pixied_launcher_nfs_dispatcher_content "$state_dir")
+    actual=$(<"$path")
+    [ "$actual" = "$expected" ]
+}
+
+# @description Return the launcher hash that uninstall should validate.
+# A migrated NFS dispatcher can temporarily have an older hash in a peer state
+# file, so its exact canonical content supplies the current expected hash.
+#
+# @arg $1 string The launcher path.
+# @arg $2 string The recorded launcher hash.
+# @arg $3 string The recorded home mode.
+# @arg $4 string The canonical shared state directory.
+# @stdout The expected launcher hash.
+# @exitcode 0 Always when the recorded hash is usable.
+pixied_launcher_uninstall_hash() {
+    local path=$1 recorded_hash=$2 home_mode=$3 state_dir=$4
+    if [ "$home_mode" = nfs ] &&
+        pixied_launcher_nfs_dispatcher_matches "$path" "$state_dir"; then
+        pixied_sha256_file "$path"
+    else
+        printf '%s' "$recorded_hash"
+    fi
 }
 
 # @description Adopt a shared launcher recorded by another machine state.
@@ -731,10 +939,17 @@ pixied_launcher_adopt_shared() {
         [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
         if [ "${PIXIED_STATE[launcher_path]:-}" = "$target" ] &&
-            [ -n "${PIXIED_STATE[launcher_hash]:-}" ] &&
-            pixied_hash_matches "$target" "${PIXIED_STATE[launcher_hash]}"; then
-            pixied_validate_owned_path "$target" "${PIXIED_STATE[launcher_hash]}"
-            actual=${PIXIED_STATE[launcher_hash]}
+            [ -n "${PIXIED_STATE[launcher_hash]:-}" ]; then
+            if pixied_hash_matches "$target" "${PIXIED_STATE[launcher_hash]}"; then
+                pixied_validate_owned_path "$target" "${PIXIED_STATE[launcher_hash]}"
+                actual=${PIXIED_STATE[launcher_hash]}
+            elif [ "${saved_state[home_mode]:-}" = nfs ] &&
+                pixied_launcher_nfs_dispatcher_matches "$target" "$PIXIED_STATE_DIR"; then
+                pixied_validate_owned_path "$target"
+                actual=$(pixied_sha256_file "$target")
+            else
+                continue
+            fi
             PIXIED_STATE=()
             for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
                 if [ "${saved_state[$key]+present}" = present ]; then
@@ -778,13 +993,24 @@ pixied_launcher_generate() {
             if ! pixied_launcher_adopt_shared "$launcher_path"; then
                 pixied_die "existing launcher is not managed by PixiEden: $launcher_path"
             fi
-            return 0
         fi
         pixied_validate_owned_path "$launcher_path" "${PIXIED_STATE[launcher_hash]}"
+        if [ "${PIXIED_HOME_MODE:-local}" = nfs ] &&
+            ! pixied_launcher_nfs_dispatcher_matches "$launcher_path" "$PIXIED_STATE_DIR"; then
+            content=$(pixied_launcher_nfs_dispatcher_content "$PIXIED_STATE_DIR")
+            content+=$'\n'
+            pixied_atomic_write "$launcher_path" "$content"
+            pixied_run chmod 0755 -- "$launcher_path"
+        fi
     else
-        printf -v cli_literal '%q' "$cli_path"
-        content="#!/usr/bin/env bash"$'\n'
-        content+="exec $cli_literal \"\$@\""$'\n'
+        if [ "${PIXIED_HOME_MODE:-local}" = nfs ]; then
+            content=$(pixied_launcher_nfs_dispatcher_content "$PIXIED_STATE_DIR")
+            content+=$'\n'
+        else
+            printf -v cli_literal '%q' "$cli_path"
+            content="#!/usr/bin/env bash"$'\n'
+            content+="exec $cli_literal \"\$@\""$'\n'
+        fi
         pixied_atomic_write "$launcher_path" "$content"
         pixied_run chmod 0755 -- "$launcher_path"
     fi
@@ -802,6 +1028,12 @@ pixied_launcher_generate() {
 # confirmation, stop session infrastructure before quarantine, and quarantine
 # the state file last so an interruption leaves a recovery checkpoint.
 #
+# The runtime no longer holds the state lock, so uninstall always acquires a
+# fresh short lock. After loading state, stale leases are swept and any live
+# foreign lease blocks the uninstall unless --force is given; a lease held by
+# this process's own ancestor chain (uninstalling from inside a runtime) is
+# excluded. The resident Zellij session check is likewise downgraded by --force.
+#
 # An active runtime bootstraps the verified state file as the identity source
 # of truth, so identity is never re-derived from the (possibly remapped) $HOME.
 # A missing or invalid active state is fatal before any removal. An active
@@ -814,11 +1046,7 @@ pixied_uninstall_run() {
         [ -z "${PIXIED_STATE_FILE:-}" ]; then
         pixied_die "uninstall identity is incomplete; refusing to remove anything"
     fi
-    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
-        pixied_state_lock_adopt_active
-    else
-        pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
-    fi
+    pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
     pixied_uninstall_restore_pending_state
     [ -f "$PIXIED_STATE_FILE" ] ||
         pixied_die "PixiEden state is unavailable; refusing to guess what to remove"
@@ -829,6 +1057,8 @@ pixied_uninstall_run() {
         [ -n "${ZELLIJ:-}" ]; then
         pixied_die "cannot uninstall from an attached Zellij runtime session; detach the managed Zellij session (exit the session) and rerun the uninstall"
     fi
+    pixied_lease_sweep
+    pixied_uninstall_require_no_active_lease
     pixied_uninstall_validate_current_state
     pixied_uninstall_scan_other_states
     pixied_uninstall_restore_state

@@ -241,6 +241,25 @@ pixied_pixi_extract_binary() {
     esac
 }
 
+# @description Return whether a path belongs to an NFS machine-local home.
+# Paths under a machine-local home must not be adopted or classified as shared
+# solely because another host records the same textual path.
+#
+# @arg $1 string The path to classify.
+# @arg $2 string The local home associated with the path.
+# @arg $3 string The recorded home mode.
+# @exitcode 0 When the path is machine-local in NFS mode.
+# @exitcode 1 Otherwise.
+pixied_pixi_path_is_machine_local() {
+    local path=$1 local_home=$2 home_mode=$3
+    [ "$home_mode" = nfs ] || return 1
+    [ -n "$local_home" ] || return 1
+    case "$path/" in
+    "$local_home/"*) return 0 ;;
+    esac
+    return 1
+}
+
 # @description Check whether another machine state records the current Pixi home.
 # Scans only validated state files under the current state directory and leaves
 # the caller's in-memory state unchanged.
@@ -279,6 +298,12 @@ pixied_pixi_home_is_recorded_by_other_state() {
             pixied_die "machine state ID does not match its directory: $candidate"
         [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
+        if pixied_pixi_path_is_machine_local "$PIXIED_PIXI_HOME" \
+            "${PIXIED_LOCAL_HOME:-}" "${PIXIED_HOME_MODE:-}" &&
+            pixied_pixi_path_is_machine_local "${PIXIED_STATE[pixi_home]:-}" \
+                "${PIXIED_STATE[local_home]:-}" "${PIXIED_STATE[home_mode]:-}"; then
+            continue
+        fi
         if [ "${PIXIED_STATE[pixi_home]:-}" = "$PIXIED_PIXI_HOME" ]; then
             found=0
             break
@@ -361,7 +386,12 @@ pixied_pixi_adopt_shared_binary() {
             pixied_die "machine state ID does not match its directory: $candidate"
         [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
-        expected="${PIXIED_STATE[data_dir]}/bin/pixi"
+        if pixied_pixi_path_is_machine_local "$target" \
+            "${PIXIED_LOCAL_HOME:-}" "${PIXIED_HOME_MODE:-}" &&
+            pixied_pixi_path_is_machine_local "$target" \
+                "${PIXIED_STATE[local_home]:-}" "${PIXIED_STATE[home_mode]:-}"; then
+            continue
+        fi
         if [ "${PIXIED_STATE[pixi_binary_path]:-}" = "$target" ] &&
             [ -n "${PIXIED_STATE[pixi_binary_hash]:-}" ] &&
             pixied_hash_matches "$target" "${PIXIED_STATE[pixi_binary_hash]}"; then

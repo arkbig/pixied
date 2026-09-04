@@ -140,14 +140,21 @@ pixied_detect_home_mode() {
 }
 
 # @description Validate that the home directory is a directory, is writable, and is owned by the current user.
+# A non-canonical path or one that contains a symlink is not a fatal error; it is
+# reported as a warning and the canonicalized form is used for subsequent checks
+# so installation can continue. Managed child paths are still validated strictly
+# elsewhere (see pixied_validate_owned_path).
 # @arg $1 string The path of the directory to validate
 # @arg $2 string The label (defaults to home)
-# @stdout The validated canonicalized path
+# @stdout The canonicalized path
 # @exitcode 0 When the validation succeeds
-# @exitcode 1 When the validation fails
+# @exitcode 1 When the directory is invalid (not a directory, not writable, or not owned)
 pixied_validate_home_directory() {
     local path=$1 label=${2:-home} canonical owner current_uid
-    canonical=$(pixied_validate_canonical_path "$path")
+    canonical=$(pixied_canonical_path "$path")
+    if [ "$path" != "$canonical" ]; then
+        pixied_warn "$label path is not canonical or contains a symlink; using canonical path: $path -> $canonical"
+    fi
     [ -d "$canonical" ] || pixied_path_fail "$label is not a directory: $canonical"
     if ! [ -w "$canonical" ] || ! [ -x "$canonical" ]; then
         pixied_path_fail "$label is not writable: $canonical"
@@ -294,10 +301,19 @@ pixied_resolve_paths() {
             fi
         fi
 
-        data_home=${XDG_DATA_HOME:-$account_home/.local/share}
-        config_home=${XDG_CONFIG_HOME:-$account_home/.config}
-        state_home=${XDG_STATE_HOME:-$account_home/.local/state}
-        bin_home=${XDG_BIN_HOME:-$account_home/.local/bin}
+        if [ "$home_mode" = nfs ]; then
+            # Keep the state registry and pre-runtime launcher discoverable from
+            # the shared account home, while placing runtime payloads locally.
+            data_home=${XDG_DATA_HOME:-$local_home/.local/share}
+            config_home=${XDG_CONFIG_HOME:-$local_home/.config}
+            state_home=${XDG_STATE_HOME:-$account_home/.local/state}
+            bin_home=${XDG_BIN_HOME:-$account_home/.local/bin}
+        else
+            data_home=${XDG_DATA_HOME:-$account_home/.local/share}
+            config_home=${XDG_CONFIG_HOME:-$account_home/.config}
+            state_home=${XDG_STATE_HOME:-$account_home/.local/state}
+            bin_home=${XDG_BIN_HOME:-$account_home/.local/bin}
+        fi
         data_home=$(pixied_resolve_xdg_path "$data_home")
         config_home=$(pixied_resolve_xdg_path "$config_home")
         state_home=$(pixied_resolve_xdg_path "$state_home")

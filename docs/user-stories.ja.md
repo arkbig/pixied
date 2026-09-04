@@ -138,7 +138,7 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 
 1. **Given**利用者が`nfs` modeと有効なmachine-local homeを選択している
    **When**installを実行する
-   **Then**runtimeのlocal homeとPixi dataがmachine-local領域に配置される。
+   **Then**runtimeのdata、config、専用`PIXI_HOME`、lockがmachine-local領域に配置され、state registryとshared dispatcherはaccount側に配置される。
 2. **Given**NFS modeでUC-04またはUC-05を開始する
    **When**runtimeを開始する
    **Then**`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけがpullされる。

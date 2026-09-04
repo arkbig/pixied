@@ -84,6 +84,26 @@ pixied_version_from_source() {
     sed -n 's/^PIXIED_VERSION="\([^"]*\)"/\1/p' "$1" | head -n 1
 }
 
+# @description Write a synthetic runtime lease file for tests.
+# Creates the lease directory when missing and records one lease with the given
+# pid, comm, kind, and args so liveness logic can be exercised without a real
+# runtime. The file name uses the production <pid>-<random6> layout.
+#
+# @arg $1 string The lease directory path.
+# @arg $2 integer The pid to record.
+# @arg $3 string The comm to record.
+# @arg $4 string The kind to record (shell or run).
+# @arg $5 string The args to record (may be empty).
+pixied_fake_lease() {
+    local lease_dir=$1 pid=$2 comm=$3 kind=$4 args=$5 file
+    mkdir -p "$lease_dir"
+    chmod 0700 "$lease_dir"
+    file="$lease_dir/$pid-$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 6)"
+    printf 'pid=%s\ncomm=%s\nkind=%s\nargs=%s\n' "$pid" "$comm" "$kind" "$args" >"$file"
+    chmod 0600 "$file"
+    printf '%s' "$file"
+}
+
 # @description Assert that a version string follows semantic versioning.
 # @arg $1 string Version string without the command name.
 # @exitcode 0 When the version is valid.
@@ -305,7 +325,7 @@ assert_semver() {
         pixied_test_fail "generated files contain the host PIXI_HOME"
     fi
 
-    run env PATH=/usr/bin:/bin HOME="$home" PIXI_HOME="$host_pixi_home" bash -c \
+    run env HOME="$home" PIXI_HOME="$host_pixi_home" bash -c \
         'cd -- "$1" && bash "$2" generate direnv' bash "$protected" "$cli"
     assert_success
     grep -Fq -- 'keep this file' "$protected/.envrc" ||
@@ -752,15 +772,16 @@ PYPROJECT
         pixied_test_fail "selected local home was not persisted"
 }
 
-@test "fresh NFS install seeds defaults from the most recently installed peer machine" {
+@test "fresh NFS install keeps its machine-local home while seeding shared defaults" {
     local home="$PIXIED_TEST_ROOT/peer-seed-home"
     local peer_local_home="$PIXIED_TEST_ROOT/peer-seed-local"
+    local new_local_home="$PIXIED_TEST_ROOT/new-seed-local"
     local data="$PIXIED_TEST_ROOT/peer-seed-data"
     local config="$PIXIED_TEST_ROOT/peer-seed-config"
     local state="$PIXIED_TEST_ROOT/peer-seed-state"
     local peer_id=peer-seed-machine
     local new_id=new-seed-machine
-    mkdir -p "$home" "$peer_local_home"
+    mkdir -p "$home" "$peer_local_home" "$new_local_home"
 
     # Install a peer machine first so its state can be used as the seed.
     run env -i PATH="$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
@@ -772,20 +793,24 @@ PYPROJECT
     [ -f "$state/pixied/machines/$peer_id/state" ] ||
         pixied_test_fail "peer state is missing"
 
-    # Install a fresh machine on the same NFS account without specifying the
-    # local home or session manager; both must be seeded from the peer.
+    # Install a fresh machine on the same NFS account. Shared configuration is
+    # seeded from the peer, but the machine-local home is selected independently.
     run env -i PATH="$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$new_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes --home-mode nfs
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes --home-mode nfs \
+        --local-home "$new_local_home"
     assert_success
     [ -f "$state/pixied/machines/$new_id/state" ] ||
         pixied_test_fail "fresh install state is missing"
     # The default session manager would be zellij; the peer value wins.
     grep -Fq -- "session_manager=none" "$state/pixied/machines/$new_id/state" ||
         pixied_test_fail "session manager was not seeded from the peer machine"
-    grep -Fq -- "local_home=$peer_local_home" "$state/pixied/machines/$new_id/state" ||
-        pixied_test_fail "local home was not seeded from the peer machine"
+    grep -Fq -- "local_home=$new_local_home" "$state/pixied/machines/$new_id/state" ||
+        pixied_test_fail "local home was inherited from the peer machine"
+    if grep -Fq -- "local_home=$peer_local_home" "$state/pixied/machines/$new_id/state"; then
+        pixied_test_fail "peer local home leaked into the new machine state"
+    fi
     grep -Fq -- "home_mode=nfs" "$state/pixied/machines/$new_id/state" ||
         pixied_test_fail "home mode was not preserved"
     grep -Fq -- "machine_id=$new_id" "$state/pixied/machines/$new_id/state" ||
@@ -977,6 +1002,7 @@ CURL
 }
 
 # US-101-1
+# US-101-2
 @test "zellij mode provisions optional Global package and isolated Pixi variables" {
     local home="$PIXIED_TEST_ROOT/phase2-zellij-home"
     local data="$PIXIED_TEST_ROOT/phase2-zellij-data"
@@ -1857,6 +1883,356 @@ CURL
         pixied_test_fail "data remains when the Zellij session list failed"
 }
 
+@test "concurrent runtime: run and shell leases coexist" {
+    local home="$PIXIED_TEST_ROOT/lease-coexist-home"
+    local data="$PIXIED_TEST_ROOT/lease-coexist-data"
+    local config="$PIXIED_TEST_ROOT/lease-coexist-config"
+    local state="$PIXIED_TEST_ROOT/lease-coexist-state"
+    local cli="$data/pixied/bin/pixied"
+    mkdir -p "$home"
+
+    local base=(env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data"
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state"
+        PIXIED_MACHINE_ID=lease-coexist PIXIED_HOME_MODE=local
+        PIXIED_SESSION_MANAGER=none
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi")
+    run "${base[@]}" bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    run "${base[@]}" bash "$cli" run bash -c 'exit 0'
+    assert_success
+    run "${base[@]}" bash "$cli" run bash -c 'exit 0'
+    assert_success
+
+    local p1 p2 st=0
+    "${base[@]}" bash "$cli" run bash -c 'sleep 1' >"/dev/null" 2>&1 &
+    p1=$!
+    "${base[@]}" bash "$cli" run bash -c 'sleep 1' >"/dev/null" 2>&1 &
+    p2=$!
+    wait "$p1" || st=1
+    wait "$p2" || st=1
+    [ "$st" -eq 0 ] || pixied_test_fail "concurrent run invocations failed"
+    [ -z "$(ls -A "$state/pixied/leases")" ] ||
+        pixied_test_fail "leases remain after all runtimes exited"
+}
+
+@test "concurrent runtime: run writes and releases a lease" {
+    local home="$PIXIED_TEST_ROOT/lease-write-home"
+    local data="$PIXIED_TEST_ROOT/lease-write-data"
+    local config="$PIXIED_TEST_ROOT/lease-write-config"
+    local state="$PIXIED_TEST_ROOT/lease-write-state"
+    local cli="$data/pixied/bin/pixied"
+    local lease_dir="$state/pixied/leases"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-write PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-write PIXIED_HOME_MODE=local \
+        bash "$cli" run bash -c \
+        'ls "$1" | grep -c -- "-" >"$HOME/lease-count"' bash "$lease_dir"
+    assert_success
+    assert_equal '1' "$(<"$home/lease-count")"
+    [ -z "$(ls -A "$lease_dir")" ] ||
+        pixied_test_fail "lease remains after the run exited"
+}
+
+@test "concurrent runtime: stale lease is swept with a warning" {
+    local home="$PIXIED_TEST_ROOT/lease-stale-home"
+    local data="$PIXIED_TEST_ROOT/lease-stale-data"
+    local config="$PIXIED_TEST_ROOT/lease-stale-config"
+    local state="$PIXIED_TEST_ROOT/lease-stale-state"
+    local lease_dir="$state/pixied/leases"
+    local lease
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-stale PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    lease=$(pixied_fake_lease "$lease_dir" 2147483647 no-such-comm run 'sleep 9999')
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-stale PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" install --yes
+    assert_success
+    assert_output --partial 'removed a stale PixiEden runtime lease: pid 2147483647 (no-such-comm) recorded as run sleep 9999 is no longer running'
+    [ ! -e "$lease" ] || pixied_test_fail "stale lease file remains after install"
+}
+
+@test "concurrent runtime: pid reuse lease is treated stale" {
+    local home="$PIXIED_TEST_ROOT/lease-reuse-home"
+    local data="$PIXIED_TEST_ROOT/lease-reuse-data"
+    local config="$PIXIED_TEST_ROOT/lease-reuse-config"
+    local state="$PIXIED_TEST_ROOT/lease-reuse-state"
+    local lease_dir="$state/pixied/leases"
+    local lease
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-reuse PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    # pid 1 is almost certainly alive, but its comm is not the recorded one,
+    # so the lease must be treated as a pid-reuse ghost and swept.
+    lease=$(pixied_fake_lease "$lease_dir" 1 pixied-run-fake shell '')
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-reuse PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" install --yes
+    assert_success
+    assert_output --partial 'removed a stale PixiEden runtime lease: pid 1 (pixied-run-fake)'
+    [ ! -e "$lease" ] || pixied_test_fail "pid-reuse lease file remains after install"
+}
+
+@test "concurrent runtime: uninstall rejects active leases without force" {
+    local home="$PIXIED_TEST_ROOT/lease-reject-home"
+    local data="$PIXIED_TEST_ROOT/lease-reject-data"
+    local config="$PIXIED_TEST_ROOT/lease-reject-config"
+    local state="$PIXIED_TEST_ROOT/lease-reject-state"
+    local lease_dir="$state/pixied/leases"
+    local foreign_pid foreign_comm
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-reject PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    sleep 60 &
+    foreign_pid=$!
+    foreign_comm=$(cat "/proc/$foreign_pid/comm" 2>/dev/null || ps -o comm= -p "$foreign_pid")
+    pixied_fake_lease "$lease_dir" "$foreign_pid" "$foreign_comm" shell '' >/dev/null
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-reject PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" uninstall --yes
+    kill "$foreign_pid" 2>/dev/null || true
+    wait "$foreign_pid" 2>/dev/null || true
+    assert_failure 1
+    assert_output --partial 'cannot uninstall while another PixiEden runtime is active'
+    assert_output --partial "  - pid $foreign_pid ($foreign_comm): shell"
+    assert_output --partial 'pixied uninstall --force'
+    [ -f "$state/pixied/machines/lease-reject/state" ] ||
+        pixied_test_fail "state was removed while a foreign lease was active"
+    [ -d "$data/pixied" ] ||
+        pixied_test_fail "data was removed while a foreign lease was active"
+}
+
+@test "concurrent runtime: force uninstall warns and proceeds over leases" {
+    local home="$PIXIED_TEST_ROOT/lease-force-home"
+    local data="$PIXIED_TEST_ROOT/lease-force-data"
+    local config="$PIXIED_TEST_ROOT/lease-force-config"
+    local state="$PIXIED_TEST_ROOT/lease-force-state"
+    local lease_dir="$state/pixied/leases"
+    local foreign_pid foreign_comm
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-force PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    sleep 60 &
+    foreign_pid=$!
+    foreign_comm=$(cat "/proc/$foreign_pid/comm" 2>/dev/null || ps -o comm= -p "$foreign_pid")
+    pixied_fake_lease "$lease_dir" "$foreign_pid" "$foreign_comm" shell '' >/dev/null
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-force PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" uninstall --yes --force
+    kill "$foreign_pid" 2>/dev/null || true
+    wait "$foreign_pid" 2>/dev/null || true
+    assert_success
+    assert_output --partial 'uninstalling with --force while PixiEden runtimes are active'
+    assert_output --partial "  - pid $foreign_pid ($foreign_comm): shell"
+    [ ! -e "$state/pixied/machines/lease-force/state" ] ||
+        pixied_test_fail "state remains after a forced uninstall"
+    [ ! -e "$data/pixied" ] ||
+        pixied_test_fail "data remains after a forced uninstall"
+    [ ! -e "$lease_dir" ] ||
+        pixied_test_fail "the machine lease directory remains after a forced uninstall"
+}
+
+@test "concurrent runtime: uninstall excludes its own ancestor lease" {
+    local home="$PIXIED_TEST_ROOT/lease-ancestor-home"
+    local data="$PIXIED_TEST_ROOT/lease-ancestor-data"
+    local config="$PIXIED_TEST_ROOT/lease-ancestor-config"
+    local state="$PIXIED_TEST_ROOT/lease-ancestor-state"
+    local lease_dir="$state/pixied/leases"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-ancestor PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    # The wrapper records a lease for its own pid and runs the uninstall as a
+    # child; the ancestor-chain exclusion must let the uninstall proceed
+    # without --force.
+    mkdir -p "$lease_dir"
+    chmod 0700 "$lease_dir"
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-ancestor PIXIED_HOME_MODE=local \
+        bash -c '
+        lease_dir=$1
+        comm=$(cat "/proc/$$/comm" 2>/dev/null || ps -o comm= -p "$$")
+        lease="$lease_dir/$$-anc3stor"
+        printf "pid=%s\ncomm=%s\nkind=shell\nargs=\n" "$$" "$comm" >"$lease"
+        chmod 0600 "$lease"
+        env -i PATH="$PATH" HOME="$2" XDG_DATA_HOME="$3" XDG_CONFIG_HOME="$4" \
+            XDG_STATE_HOME="$5" PIXIED_MACHINE_ID=lease-ancestor PIXIED_HOME_MODE=local \
+            bash "$6" uninstall --yes
+    ' bash "$lease_dir" "$home" "$data" "$config" "$state" "$data/pixied/bin/pixied"
+    assert_success
+    if command grep -Fq -- 'cannot uninstall while another PixiEden runtime is active' <<<"$output"; then
+        pixied_test_fail "uninstall rejected its own ancestor lease"
+    fi
+    [ ! -e "$state/pixied/machines/lease-ancestor/state" ] ||
+        pixied_test_fail "state remains after the ancestor-lease uninstall"
+}
+
+@test "concurrent runtime: install warns over active leases and continues" {
+    local home="$PIXIED_TEST_ROOT/lease-install-home"
+    local data="$PIXIED_TEST_ROOT/lease-install-data"
+    local config="$PIXIED_TEST_ROOT/lease-install-config"
+    local state="$PIXIED_TEST_ROOT/lease-install-state"
+    local lease_dir="$state/pixied/leases"
+    local foreign_pid foreign_comm
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-install PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    sleep 60 &
+    foreign_pid=$!
+    foreign_comm=$(cat "/proc/$foreign_pid/comm" 2>/dev/null || ps -o comm= -p "$foreign_pid")
+    pixied_fake_lease "$lease_dir" "$foreign_pid" "$foreign_comm" run 'sleep 60' >/dev/null
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-install PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" install --yes
+    kill "$foreign_pid" 2>/dev/null || true
+    wait "$foreign_pid" 2>/dev/null || true
+    assert_success
+    assert_output --partial 'PixiEden is reinstalled while another runtime is active'
+    assert_output --partial "  - pid $foreign_pid ($foreign_comm): run sleep 60"
+
+    # A lease held only by the install process's own ancestor chain must not
+    # warn, matching the uninstall ancestor exclusion: a reinstall from inside
+    # a running shell stays quiet about that shell.
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-install PIXIED_HOME_MODE=local \
+        bash -c '
+        lease_dir=$1
+        comm=$(cat "/proc/$$/comm" 2>/dev/null || ps -o comm= -p "$$")
+        lease="$lease_dir/$$-anc3stor"
+        printf "pid=%s\ncomm=%s\nkind=shell\nargs=\n" "$$" "$comm" >"$lease"
+        chmod 0600 "$lease"
+        env -i PATH="$PATH" HOME="$2" XDG_DATA_HOME="$3" XDG_CONFIG_HOME="$4" \
+            XDG_STATE_HOME="$5" PIXIED_MACHINE_ID=lease-install PIXIED_HOME_MODE=local \
+            bash "$6" install --yes
+    ' bash "$lease_dir" "$home" "$data" "$config" "$state" "$data/pixied/bin/pixied"
+    assert_success
+    if command grep -Fq -- 'PixiEden is reinstalled while another runtime is active' <<<"$output"; then
+        pixied_test_fail "install warned when only its own ancestor lease was active"
+    fi
+}
+
+@test "concurrent runtime: force is independent of yes" {
+    local home="$PIXIED_TEST_ROOT/lease-indep-home"
+    local data="$PIXIED_TEST_ROOT/lease-indep-data"
+    local config="$PIXIED_TEST_ROOT/lease-indep-config"
+    local state="$PIXIED_TEST_ROOT/lease-indep-state"
+    local lease_dir="$state/pixied/leases"
+    local foreign_pid foreign_comm
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-indep PIXIED_HOME_MODE=local \
+        PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    sleep 60 &
+    foreign_pid=$!
+    foreign_comm=$(cat "/proc/$foreign_pid/comm" 2>/dev/null || ps -o comm= -p "$foreign_pid")
+    pixied_fake_lease "$lease_dir" "$foreign_pid" "$foreign_comm" shell '' >/dev/null
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-indep PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" uninstall --force
+    assert_failure 1
+    assert_output --partial 'uninstall requires an interactive confirmation or --yes'
+    [ -f "$state/pixied/machines/lease-indep/state" ] ||
+        pixied_test_fail "state was removed by --force without --yes"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-indep PIXIED_HOME_MODE=local \
+        bash "$data/pixied/bin/pixied" uninstall --force --yes
+    kill "$foreign_pid" 2>/dev/null || true
+    wait "$foreign_pid" 2>/dev/null || true
+    assert_success
+    assert_output --partial 'uninstalling with --force while PixiEden runtimes are active'
+    [ ! -e "$state/pixied/machines/lease-indep/state" ] ||
+        pixied_test_fail "state remains after --force --yes"
+}
+
+@test "concurrent runtime: force downgrades the resident zellij session check" {
+    local home="$PIXIED_TEST_ROOT/lease-zellij-force-home"
+    local data="$PIXIED_TEST_ROOT/lease-zellij-force-data"
+    local config="$PIXIED_TEST_ROOT/lease-zellij-force-config"
+    local state="$PIXIED_TEST_ROOT/lease-zellij-force-state"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-zellij-force \
+        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-zellij-force \
+        PIXIED_FAKE_ZELLIJ_REMAINS=1 \
+        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
+        bash "$data/pixied/bin/pixied" uninstall --yes
+    assert_failure 1
+    assert_output --partial 'cannot uninstall while the managed Zellij session'
+    [ -f "$state/pixied/machines/lease-zellij-force/state" ] ||
+        pixied_test_fail "state was removed while the Zellij session was active"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-zellij-force \
+        PIXIED_FAKE_ZELLIJ_REMAINS=1 \
+        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
+        bash "$data/pixied/bin/pixied" uninstall --yes --force
+    assert_success
+    assert_output --partial "uninstalling with --force while the managed Zellij session 'pixied' is still active"
+    [ ! -e "$state/pixied/machines/lease-zellij-force/state" ] ||
+        pixied_test_fail "state remains after a forced resident-session uninstall"
+}
+
 # US-101-3
 @test "saved installation paths are restored on reinstall" {
     local home="$PIXIED_TEST_ROOT/phase2-path-home"
@@ -2403,7 +2779,7 @@ CASES
 }
 
 # US-106-3
-@test "NFS sync skips push after child failure or signal" {
+@test "NFS allowlist sync stays account-authoritative after child failure or signal" {
     local home="$PIXIED_TEST_ROOT/phase4-status-home"
     local local_home="$PIXIED_TEST_ROOT/phase4-status-local"
     local data="$PIXIED_TEST_ROOT/phase4-status-data"
@@ -2447,12 +2823,13 @@ CASES
     assert_equal 'signal-child' "$(<"$local_home/.bashrc")"
 }
 
-@test "NFS sync refuses an existing lock" {
+@test "concurrent runtime: reconcile skips with a warning when the state lock is busy" {
     local home="$PIXIED_TEST_ROOT/phase4-lock-home"
     local local_home="$PIXIED_TEST_ROOT/phase4-lock-local"
     local data="$PIXIED_TEST_ROOT/phase4-lock-data"
     local config="$PIXIED_TEST_ROOT/phase4-lock-config"
     local state="$PIXIED_TEST_ROOT/phase4-lock-state"
+    local lock="$state/pixied/machines/phase4-lock/.lock"
     mkdir -p "$home" "$local_home"
     printf 'stable\n' >"$home/.bashrc"
 
@@ -2470,57 +2847,21 @@ CASES
         bash "$data/pixied/bin/pixied" run bash -c 'exit 0'
     assert_success
 
-    mkdir "$state/pixied/.lock"
+    mkdir "$lock"
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID=phase4-lock \
         bash "$data/pixied/bin/pixied" run bash -c \
         'printf lock-child >"$HOME/lock-child"'
-    assert_failure 1
-    assert_output --partial 'state lock already exists'
-    assert_output --partial $'If you use Zellij, a detached session also blocks uninstall:\n  1. Check:'
-    assert_output --partial $'\n  2. End the managed session:'
-    assert_output --partial $'\n  3. Remove only the empty stale lock: rmdir -- '
-    assert_output --partial "'$state/pixied/.lock'"
-    assert_output --partial $'\nDo not use rm -rf.'
-    [ ! -e "$local_home/lock-child" ] || pixied_test_fail "child ran while sync lock existed"
-    [ -d "$state/pixied/.lock" ] || pixied_test_fail "existing sync lock was removed"
-    rmdir "$state/pixied/.lock"
+    assert_success
+    assert_output --partial "skipping this start's synchronization"
+    [ -e "$local_home/lock-child" ] || pixied_test_fail "child did not run while the state lock was busy"
+    [ -d "$lock" ] || pixied_test_fail "existing sync lock was removed"
+    rmdir "$lock"
 }
 
-@test "Zellij session residue prevents the clean-exit push" {
-    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
-    local home="$PIXIED_TEST_ROOT/phase4-detach-home"
-    local local_home="$PIXIED_TEST_ROOT/phase4-detach-local"
-    local data="$PIXIED_TEST_ROOT/phase4-detach-data"
-    local config="$PIXIED_TEST_ROOT/phase4-detach-config"
-    local state="$PIXIED_TEST_ROOT/phase4-detach-state"
-    mkdir -p "$home" "$local_home"
-    printf 'stable\n' >"$home/.bashrc"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase4-detach PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_success
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase4-detach \
-        PIXIED_FAKE_ZELLIJ_REMAINS=1 \
-        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
-        PIXIED_FAKE_ZELLIJ_TOUCH="$local_home/.bashrc" \
-        PIXIED_FAKE_ZELLIJ_CONTENT='detached-local' \
-        script -qec "bash '$data/pixied/bin/pixied' shell" /dev/null
-    assert_success
-    assert_equal 'stable' "$(<"$home/.bashrc")"
-    assert_equal 'detached-local' "$(<"$local_home/.bashrc")"
-}
-
-@test "local run honors the runtime lock" {
+@test "concurrent runtime: local run continues over a busy state lock" {
     local home="$PIXIED_TEST_ROOT/phase4-local-lock-home"
     local data="$PIXIED_TEST_ROOT/phase4-local-lock-data"
     local config="$PIXIED_TEST_ROOT/phase4-local-lock-config"
@@ -2540,10 +2881,9 @@ CASES
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=local \
         PIXIED_MACHINE_ID=phase4-local-lock \
         bash "$data/pixied/bin/pixied" run bash -c 'printf child >"$HOME/local-lock-child"'
-    assert_failure 1
-    assert_output --partial 'state lock already exists'
-    [ ! -e "$marker" ] || pixied_test_fail "local child ran while the runtime lock existed"
-    [ -d "$state/pixied/.lock" ] || pixied_test_fail "existing runtime lock was removed"
+    assert_success
+    [ -e "$marker" ] || pixied_test_fail "local child did not run over a busy state lock"
+    [ -d "$state/pixied/.lock" ] || pixied_test_fail "existing state lock was removed"
     rmdir "$state/pixied/.lock"
 }
 
@@ -2794,7 +3134,8 @@ CASES
         bash "$PIXIED_REPO_ROOT" "$lock"
     assert_failure
     assert_output --partial 'state lock already exists'
-    assert_output --partial 'The PixiEden runtime may still be active, or the lock may be stale'
+    assert_output --partial 'Another PixiEden install or uninstall may be writing state'
+    assert_output --partial 'remove only the empty lock directory'
     [ -d "$lock" ] || pixied_test_fail "existing lock was removed"
 }
 
@@ -2834,20 +3175,13 @@ pixied_active_fixture() {
 # @description Run a command with the active-runtime environment derived from the fixture.
 # @arg $@ string Command and arguments to run.
 pixied_active_run() {
-    # Simulate the runtime session that already holds the state lock. In
-    # production pixied_sync_runtime_begin acquires PIXIED_STATE_DIR/.lock and
-    # holds it for the session lifetime; the active uninstall borrows this
-    # existing lock, so it must exist before an active-runtime command runs.
-    # The lock is created here (not in pixied_active_fixture) so the fixture's
-    # initial non-active install-local.sh --yes deploy is not blocked by an
-    # existing lock.
-    mkdir -p "$ah_state/pixied/.lock"
+    # An active runtime no longer holds a state lock; the ancestor-lease test
+    # creates leases explicitly when it needs them.
     env HOME="$ah_home" PATH="$PIXIED_TEST_ROOT/${ah_prefix}-fakebin:$PATH" PIXI_HOME="$ah_existing" \
         XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" XDG_STATE_HOME="$ah_state" \
         PIXIED_MACHINE_ID="$ah_id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER="$ah_session" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        PIXIED_COMMAND_LOG="$ah_log" \
-        PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$ah_state_file" \
+        PIXIED_COMMAND_LOG="$ah_log" PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$ah_state_file" \
         "$@"
 }
 
@@ -2904,9 +3238,6 @@ pixied_assert_no_deploy_residue() {
 
 @test "active runtime: verified state overrides forged environment" {
     pixied_active_fixture ar-forged ar-forged
-    # This active install runs directly (not through pixied_active_run), so the
-    # runtime-held state lock it expects must be created here.
-    mkdir -p "$ah_state/pixied/.lock"
     run env HOME="$ah_home" PATH="$PIXIED_TEST_ROOT/ar-forged-fakebin:$PATH" \
         PIXI_HOME="$ah_existing" XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" \
         XDG_STATE_HOME="$ah_state" PIXIED_MACHINE_ID=ar-forged PIXIED_HOME_MODE=local \
@@ -3109,7 +3440,7 @@ EOF
     pixied_active_fixture ar-uninstall ar-uninstall
     run pixied_active_run bash "$ah_data_dir/bin/pixied" uninstall --yes
     assert_success
-    [ ! -e "$ah_data_dir" ] || pixied_test_fail "managed data dir was not removed"
+    [ ! -e "$ah_data_dir" ] || pixied_test_fail "managed data directory was not removed"
     [ ! -e "$ah_state_file" ] || pixied_test_fail "state file was not removed"
     [ ! -e "$ah_home/.local/bin/pixied" ] || pixied_test_fail "launcher was not removed"
     [ -d "$ah_home" ] || pixied_test_fail "account home was removed"
@@ -3145,4 +3476,376 @@ EOF
     assert_output --partial 'cannot uninstall from an attached Zellij runtime session'
     [ -e "$ah_state_file" ] || pixied_test_fail "state was removed while the Zellij runtime was active"
     [ -e "$ah_data_dir" ] || pixied_test_fail "data was removed while the Zellij runtime was active"
+}
+
+@test "NFS machines isolate payloads, locks and leases while sharing the dispatcher" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-independent-account"
+    local local_home_a="$PIXIED_TEST_ROOT/nfs-independent-local-a"
+    local local_home_b="$PIXIED_TEST_ROOT/nfs-independent-local-b"
+    local state="$PIXIED_TEST_ROOT/nfs-independent-state"
+    local machine_a=nfs-independent-a
+    local machine_b=nfs-independent-b
+    local data_a="$local_home_a/.local/share/pixied"
+    local data_b="$local_home_b/.local/share/pixied"
+    local config_a="$local_home_a/.config/pixied"
+    local config_b="$local_home_b/.config/pixied"
+    local pixi_home_a="$data_a/pixi"
+    local pixi_home_b="$data_b/pixi"
+    local lock_a="$state/pixied/machines/$machine_a/.lock"
+    local lease_a="$state/pixied/machines/$machine_a/leases"
+    local launcher="$account_home/.local/bin/pixied"
+    local project="$PIXIED_TEST_ROOT/nfs-independent-project"
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b" "$project"
+    printf '[workspace]\nname = "nfs-independent"\n' >"$project/pixi.toml"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -f "$state/pixied/machines/$machine_a/state" ] ||
+        pixied_test_fail "machine A state is missing"
+    [ -x "$data_a/bin/pixied" ] || pixied_test_fail "machine A payload is missing"
+    [ -f "$config_a/runtime-hook.bash" ] || pixied_test_fail "machine A hook is missing"
+    [ -x "$pixi_home_a/bin/direnv" ] || pixied_test_fail "machine A Pixi home is missing"
+    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher is missing"
+
+    mkdir "$lock_a"
+    pixied_fake_lease "$lease_a" 2147483647 pixied-run-fake run 'sleep 9999' >/dev/null
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -d "$lease_a" ] || pixied_test_fail "machine A lease directory was removed by machine B"
+    [ -f "$state/pixied/machines/$machine_b/state" ] ||
+        pixied_test_fail "machine B state is missing"
+    [ -x "$data_b/bin/pixied" ] || pixied_test_fail "machine B payload is missing"
+    [ -f "$config_b/runtime-hook.bash" ] || pixied_test_fail "machine B hook is missing"
+    [ -x "$pixi_home_b/bin/direnv" ] || pixied_test_fail "machine B Pixi home is missing"
+    [ -d "$lock_a" ] || pixied_test_fail "machine A lock was removed by machine B"
+    [ "$data_a" != "$data_b" ] || pixied_test_fail "machine payload directories are shared"
+    [ "$config_a" != "$config_b" ] || pixied_test_fail "machine config directories are shared"
+    [ "$pixi_home_a" != "$pixi_home_b" ] || pixied_test_fail "machine Pixi homes are shared"
+    grep -Fq -- "data_dir=$data_a" "$state/pixied/machines/$machine_a/state" ||
+        pixied_test_fail "machine A data path was not persisted"
+    grep -Fq -- "data_dir=$data_b" "$state/pixied/machines/$machine_b/state" ||
+        pixied_test_fail "machine B data path was not persisted"
+    grep -Fq -- "config_dir=$config_a" "$state/pixied/machines/$machine_a/state" ||
+        pixied_test_fail "machine A config path was not persisted"
+    grep -Fq -- "config_dir=$config_b" "$state/pixied/machines/$machine_b/state" ||
+        pixied_test_fail "machine B config path was not persisted"
+    grep -Fq -- "pixi_home=$pixi_home_a" "$state/pixied/machines/$machine_a/state" ||
+        pixied_test_fail "machine A Pixi home was not persisted"
+    grep -Fq -- "pixi_home=$pixi_home_b" "$state/pixied/machines/$machine_b/state" ||
+        pixied_test_fail "machine B Pixi home was not persisted"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash -c \
+        'cd "$1" && bash "$2" generate direnv' bash "$project" "$launcher"
+    assert_success
+    grep -Fq -- "if [ -x $launcher ]; then" "$project/.envrc" ||
+        pixied_test_fail "generated direnv does not use the shared dispatcher"
+    [ ! -e "$project/.envrc" ] ||
+        ! command grep -Fq -- "$data_b/bin/pixied" "$project/.envrc" ||
+        pixied_test_fail "generated direnv embeds a machine-local CLI path"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
+        'printf from-dispatcher >"$HOME/dispatcher-marker"'
+    assert_success
+    assert_equal 'from-dispatcher' "$(<"$local_home_b/dispatcher-marker")"
+    [ ! -e "$local_home_a/dispatcher-marker" ] ||
+        pixied_test_fail "dispatcher used machine A local home"
+
+    run bash -c '
+        printf "exit\n" |
+            env -i PATH="$1" HOME="$2" XDG_STATE_HOME="$3" \
+                PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$4" \
+                PIXIED_MACHINE_ID="$5" PIXIED_AUTO_ATTACH=none \
+                script -qec "bash \"$6\" shell" /dev/null
+    ' bash "$PATH" "$account_home" "$state" "$local_home_b" "$machine_b" "$launcher"
+    assert_success
+    [ -d "$lock_a" ] || pixied_test_fail "machine A lock was removed by machine B shell"
+
+    rmdir "$lock_a"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" bash "$PIXIED_REPO_ROOT/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$data_a" ] || pixied_test_fail "machine A data directory remains"
+    [ ! -e "$config_a/runtime-hook.bash" ] ||
+        pixied_test_fail "machine A runtime hook remains"
+    [ ! -e "$pixi_home_a" ] || pixied_test_fail "machine A Pixi home remains"
+    [ ! -e "$state/pixied/machines/$machine_a/state" ] ||
+        pixied_test_fail "machine A state remains"
+    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher was removed with machine A"
+    [ -x "$data_b/bin/pixied" ] || pixied_test_fail "machine B payload was removed with machine A"
+    [ -f "$config_b/runtime-hook.bash" ] || pixied_test_fail "machine B hook was removed with machine A"
+    [ -x "$pixi_home_b/bin/direnv" ] || pixied_test_fail "machine B Pixi home was removed with machine A"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
+        'printf after-uninstall >"$HOME/after-uninstall-marker"'
+    assert_success
+    assert_equal 'after-uninstall' "$(<"$local_home_b/after-uninstall-marker")"
+}
+
+@test "NFS uninstall keeps identical local roots machine-local" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-identical-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-identical-local"
+    local state="$PIXIED_TEST_ROOT/nfs-identical-state"
+    local machine_a=nfs-identical-a
+    local machine_b=nfs-identical-b
+    local data="$local_home/.local/share/pixied"
+    local state_a="$state/pixied/machines/$machine_a/state"
+    local state_b="$state/pixied/machines/$machine_b/state"
+    local launcher="$account_home/.local/bin/pixied"
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    mkdir -p "${state_b%/*}"
+    sed -e "s/^machine_id=$machine_a$/machine_id=$machine_b/" \
+        -e "s#^sync_baseline=.*#sync_baseline=$state/pixied/machines/$machine_b/sync-baseline#" \
+        "$state_a" >"$state_b"
+    chmod 0600 "$state_b"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_a" \
+        bash "$data/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$data" ] || pixied_test_fail "machine-local payload was treated as shared"
+    [ ! -e "$state_a" ] || pixied_test_fail "current machine state remains"
+    [ -f "$state_b" ] || pixied_test_fail "peer state was removed"
+    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher was removed"
+}
+
+@test "NFS reinstall migrates a managed direct launcher to a dispatcher" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-migration-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-migration-local"
+    local state="$PIXIED_TEST_ROOT/nfs-migration-state"
+    local machine_id=nfs-migration-machine
+    local data="$local_home/.local/share/pixied"
+    local launcher="$account_home/.local/bin/pixied"
+    local state_file="$state/pixied/machines/$machine_id/state"
+    local legacy_hash current_hash
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    printf '#!/usr/bin/env bash\nexec %q "\$@"\n' "$data/bin/pixied" >"$launcher"
+    chmod 0755 "$launcher"
+    legacy_hash=$(sha256sum "$launcher" | cut -d' ' -f1)
+    sed -i "s/^launcher_hash=.*/launcher_hash=$legacy_hash/" "$state_file"
+    chmod 0600 "$state_file"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$data/bin/pixied" install --yes
+    assert_success
+    grep -Fq -- 'state_file="$state_root/machines/$machine_id/state"' "$launcher" ||
+        pixied_test_fail "managed direct launcher was not migrated"
+    if command grep -Fq -- "exec $data/bin/pixied" "$launcher"; then
+        pixied_test_fail "legacy direct launcher content remains"
+    fi
+    current_hash=$(sha256sum "$launcher" | cut -d' ' -f1)
+    grep -Fq -- "launcher_hash=$current_hash" "$state_file" ||
+        pixied_test_fail "migrated launcher hash was not persisted"
+}
+
+@test "NFS dispatcher migration tolerates stale peer launcher hashes" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-stale-hash-account"
+    local local_home_a="$PIXIED_TEST_ROOT/nfs-stale-hash-local-a"
+    local local_home_b="$PIXIED_TEST_ROOT/nfs-stale-hash-local-b"
+    local local_home_c="$PIXIED_TEST_ROOT/nfs-stale-hash-local-c"
+    local state="$PIXIED_TEST_ROOT/nfs-stale-hash-state"
+    local machine_a=nfs-stale-hash-a
+    local machine_b=nfs-stale-hash-b
+    local machine_c=nfs-stale-hash-c
+    local data_a="$local_home_a/.local/share/pixied"
+    local data_b="$local_home_b/.local/share/pixied"
+    local data_c="$local_home_c/.local/share/pixied"
+    local launcher="$account_home/.local/bin/pixied"
+    local state_a="$state/pixied/machines/$machine_a/state"
+    local state_b="$state/pixied/machines/$machine_b/state"
+    local state_c="$state/pixied/machines/$machine_c/state"
+    local legacy_hash
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b" "$local_home_c"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    printf '#!/usr/bin/env bash\nexec %q "\$@"\n' "$data_a/bin/pixied" >"$launcher"
+    chmod 0755 "$launcher"
+    legacy_hash=$(sha256sum "$launcher" | cut -d' ' -f1)
+    sed -i "s/^launcher_hash=.*/launcher_hash=$legacy_hash/" "$state_a"
+    chmod 0600 "$state_a"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -x "$data_b/bin/pixied" ] || pixied_test_fail "machine B payload is missing"
+    grep -Fq -- 'state_file="$state_root/machines/$machine_id/state"' "$launcher" ||
+        pixied_test_fail "machine B did not migrate the launcher"
+    grep -Fq -- "launcher_hash=$legacy_hash" "$state_a" ||
+        pixied_test_fail "machine A stale launcher hash was unexpectedly rewritten"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_c" \
+        PIXIED_MACHINE_ID="$machine_c" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -x "$data_c/bin/pixied" ] || pixied_test_fail "machine C payload is missing"
+    [ -f "$state_c" ] || pixied_test_fail "machine C state is missing"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" \
+        bash "$data_a/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$data_a" ] || pixied_test_fail "machine A payload remains"
+    [ ! -e "$state_a" ] || pixied_test_fail "machine A state remains"
+    [ -f "$state_b" ] || pixied_test_fail "machine B state was removed"
+    [ -f "$state_c" ] || pixied_test_fail "machine C state was removed"
+    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher was removed too early"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" \
+        bash "$data_b/bin/pixied" uninstall --yes
+    assert_success
+    [ -f "$state_c" ] || pixied_test_fail "last peer state was removed too early"
+    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher was removed before the last machine"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_c" \
+        PIXIED_MACHINE_ID="$machine_c" \
+        bash "$data_c/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$launcher" ] || pixied_test_fail "last machine left the shared dispatcher"
+}
+
+@test "NFS reinstall rejects a legacy shared payload state" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-legacy-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-legacy-local"
+    local state="$PIXIED_TEST_ROOT/nfs-legacy-state"
+    local machine_id=nfs-legacy-machine
+    local data="$local_home/.local/share/pixied"
+    local state_file="$state/pixied/machines/$machine_id/state"
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    sed -i \
+        -e "s#^data_dir=.*#data_dir=$account_home/.local/share/pixied#" \
+        -e "s#^config_dir=.*#config_dir=$account_home/.config/pixied#" \
+        "$state_file"
+    chmod 0600 "$state_file"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" \
+        bash "$data/bin/pixied" install --yes
+    assert_failure 1
+    assert_output --partial 'existing NFS state uses legacy shared runtime paths'
+    [ -f "$state_file" ] || pixied_test_fail "legacy state was removed"
+    [ -x "$data/bin/pixied" ] || pixied_test_fail "payload changed after legacy state rejection"
+}
+
+@test "concurrent runtime: active NFS runtime operates over a machine lease" {
+    local account_home="$PIXIED_TEST_ROOT/active-nfs-account"
+    local local_home="$PIXIED_TEST_ROOT/active-nfs-local"
+    local state="$PIXIED_TEST_ROOT/active-nfs-state"
+    local machine_id=active-nfs-machine
+    local data="$local_home/.local/share/pixied"
+    local state_file="$state/pixied/machines/$machine_id/state"
+    local lock="$state/pixied/machines/$machine_id/.lock"
+    local lease_dir="$state/pixied/machines/$machine_id/leases"
+    local foreign_pid foreign_lease
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -f "$state_file" ] || pixied_test_fail "active NFS state is missing"
+    [ -x "$data/bin/pixied" ] || pixied_test_fail "active NFS payload is missing"
+
+    # A live foreign lease on this machine warns but never blocks an active
+    # runtime reinstall; the runtime holds no long lock anymore.
+    sleep 60 &
+    foreign_pid=$!
+    foreign_comm=$(cat "/proc/$foreign_pid/comm" 2>/dev/null || ps -o comm= -p "$foreign_pid")
+    foreign_lease=$(pixied_fake_lease "$lease_dir" "$foreign_pid" "$foreign_comm" run 'sleep 60')
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$state_file" \
+        bash "$data/bin/pixied" install --yes
+    assert_success
+    assert_output --partial 'Active runtime installation kept the verified identity intact'
+    assert_output --partial 'PixiEden is reinstalled while another runtime is active'
+    kill "$foreign_pid" 2>/dev/null || true
+    wait "$foreign_pid" 2>/dev/null || true
+    rm -f -- "$foreign_lease"
+
+    # Uninstalling from inside the runtime succeeds without --force because
+    # the wrapper's own lease is on the ancestor chain and is excluded.
+    mkdir -p "$lease_dir"
+    chmod 0700 "$lease_dir"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        bash -c '
+        lease_dir=$1
+        comm=$(cat "/proc/$$/comm" 2>/dev/null || ps -o comm= -p "$$")
+        lease="$lease_dir/$$-f0rce01"
+        printf "pid=%s\ncomm=%s\nkind=shell\nargs=\n" "$$" "$comm" >"$lease"
+        chmod 0600 "$lease"
+        env -i PATH="$PATH" HOME="$2" XDG_STATE_HOME="$3" \
+            PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$4" \
+            PIXIED_MACHINE_ID="$5" PIXIED_SESSION_MANAGER=none \
+            PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$6" \
+            bash "$7" uninstall --yes
+    ' bash "$lease_dir" "$account_home" "$state" "$local_home" \
+        "$machine_id" "$state_file" "$data/bin/pixied"
+    assert_success
+    [ ! -e "$state_file" ] || pixied_test_fail "active NFS state remains after uninstall"
+    [ ! -e "$data" ] || pixied_test_fail "active NFS payload remains after uninstall"
+    [ ! -e "$lock" ] || pixied_test_fail "the short state lock remained after the uninstall"
 }

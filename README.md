@@ -141,10 +141,11 @@ NFS mode synchronizes only `.bashrc`, `.bash_profile`, `.profile`, `.bash_logout
 
 ### Recovering from Synchronization Errors
 
-Locks are not deleted automatically. After confirming that the relevant `pixied` process has stopped, delete only the empty lock directory as follows:
+Locks are not deleted automatically. After confirming that the relevant `pixied` process has stopped, delete only the empty lock directory as follows. In `nfs` mode, remove the lock for the current machine; in local mode, use the state-root lock:
 
 ```bash
-rmdir -- "$PIXIED_STATE_DIR/.lock"
+rmdir -- "${PIXIED_STATE_DIR}/machines/${PIXIED_MACHINE_ID}/.lock"  # nfs
+rmdir -- "$PIXIED_STATE_DIR/.lock"                                  # local
 ```
 
 Do not delete the lock while a process is running, and do not run `rm -rf` on the lock.
@@ -214,10 +215,11 @@ cannot uninstall from an active Zellij runtime; detach the managed Zellij sessio
 
 The `PIXIED_*` names shown here describe resolved paths; they are not supported as installation input overrides. Use the corresponding XDG environment variable to change a documented path location.
 
-- `PIXIED_DATA_DIR` (data, CLI, and Pixi binary): `${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
-- `PIXIED_CONFIG_DIR` (configuration and generated runtime hook): `${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
-- `PIXIED_STATE_DIR` (state and machine-specific runtime synchronization state): `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
-- CLI launcher: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`
+- `PIXIED_DATA_DIR` (data, CLI, and Pixi binary): `${XDG_DATA_HOME:-$PIXIED_LOCAL_HOME/.local/share}/pixied` in `nfs` mode, otherwise `${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
+- `PIXIED_CONFIG_DIR` (configuration and generated runtime hook): `${XDG_CONFIG_HOME:-$PIXIED_LOCAL_HOME/.config}/pixied` in `nfs` mode, otherwise `${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
+- `PIXIED_STATE_DIR` (shared state registry): `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
+- CLI launcher: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied` (a shared dispatcher in `nfs` mode)
+- Machine-local lock: `$PIXIED_STATE_DIR/machines/$PIXIED_MACHINE_ID/.lock` in `nfs` mode, otherwise `$PIXIED_STATE_DIR/.lock`
 - Machine-local tools and Pixi Global data: `$PIXIED_LOCAL_HOME`
 
 ## Documentation

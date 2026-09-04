@@ -139,10 +139,11 @@ NFSモードの同期対象はhome直下の`.bashrc`、`.bash_profile`、`.profi
 
 ### 同期エラーからの復旧
 
-lockが残っている場合も、自動削除は行いません。該当する`pixied`プロセスが停止していることを確認した後、空のlock directoryだけを次のように削除してください。
+lockが残っている場合も、自動削除は行いません。該当する`pixied`プロセスが停止していることを確認した後、空のlock directoryだけを削除してください。`nfs`modeではcurrent machineのlockを、local modeではstate rootのlockを対象にします。
 
 ```bash
-rmdir -- "$PIXIED_STATE_DIR/.lock"
+rmdir -- "${PIXIED_STATE_DIR}/machines/${PIXIED_MACHINE_ID}/.lock"  # nfs
+rmdir -- "$PIXIED_STATE_DIR/.lock"                                  # local
 ```
 
 実行中のprocessがある状態でlockを削除したり、lockに対して`rm -rf`を実行したりしないでください。
@@ -212,10 +213,11 @@ cannot uninstall from an active Zellij runtime; detach the managed Zellij sessio
 
 ここに示す`PIXIED_*`名は解決済みpathを説明するための名前であり、installの入力overrideとしてはサポートしません。文書化されたpathの場所を変更する場合は対応するXDG環境変数を使ってください。
 
-- `PIXIED_DATA_DIR`（データ、CLI、Pixi binary）: `${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
-- `PIXIED_CONFIG_DIR`（設定、生成runtime hook）: `${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
-- `PIXIED_STATE_DIR`（状態、machineごとのruntime同期状態）: `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
-- CLI ランチャー: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`
+- `PIXIED_DATA_DIR`（データ、CLI、Pixi binary）: `nfs`modeでは`${XDG_DATA_HOME:-$PIXIED_LOCAL_HOME/.local/share}/pixied`、それ以外では`${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
+- `PIXIED_CONFIG_DIR`（設定、生成runtime hook）: `nfs`modeでは`${XDG_CONFIG_HOME:-$PIXIED_LOCAL_HOME/.config}/pixied`、それ以外では`${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
+- `PIXIED_STATE_DIR`（共有state registry）: `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
+- CLI launcher: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`（`nfs`modeではshared dispatcher）
+- machine-local lock: `nfs`modeでは`$PIXIED_STATE_DIR/machines/$PIXIED_MACHINE_ID/.lock`、それ以外では`$PIXIED_STATE_DIR/.lock`
 - マシンローカルツールとPixi Globalデータ: `$PIXIED_LOCAL_HOME`
 
 ## ドキュメント案内

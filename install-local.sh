@@ -55,6 +55,7 @@ pixied_install_local() {
         lib/common.sh
         lib/paths.sh
         lib/state.sh
+        lib/lease.sh
         lib/options.sh
         lib/pixi.sh
         lib/sync.sh

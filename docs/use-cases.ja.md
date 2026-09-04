@@ -97,8 +97,9 @@ Bash/zsh起動時のhookを設定する。
 NFSホームで開発する。
 
 1. 利用者がNFS modeとmachine-localなlocal homeを選択する。
-2. PixiEdenがPixi dataをlocal home側へ配置する。
-3. UC-04またはUC-05の開始前にallowlistをpullし、正常終了後にpushする。
+2. PixiEdenがdata、config、専用`PIXI_HOME`、lockをlocal home側へ配置し、state registryとshared dispatcherをaccount home側へ配置する。
+3. shared dispatcherがcurrent machineのstateからlocal payloadへdispatchする。
+4. UC-04またはUC-05の開始前にallowlistをpullし、正常終了後にpushする。
 
 ### UC-07
 

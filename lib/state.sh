@@ -12,7 +12,6 @@ PIXIED_STATE_LOADED=1
 
 declare -gA PIXIED_STATE=()
 PIXIED_STATE_LOCK_DIR=""
-PIXIED_STATE_LOCK_BORROWED=0
 
 # @description Bit mask of the group-write and other-write permission bits (octal 022).
 readonly PIXIED_MODE_GROUP_OTHER_WRITE=18
@@ -357,7 +356,7 @@ pixied_state_require_lock() {
     [ -n "${PIXIED_STATE_DIR:-}" ] || pixied_die "state directory is not set"
     [ -n "${PIXIED_STATE_LOCK_DIR:-}" ] ||
         pixied_die "state lock is required before writing state"
-    expected_lock=$(pixied_canonical_path "$PIXIED_STATE_DIR/.lock")
+    expected_lock=$(pixied_state_lock_path)
     canonical_lock=$(pixied_canonical_path "$PIXIED_STATE_LOCK_DIR")
     [ "$canonical_lock" = "$expected_lock" ] ||
         pixied_die "unexpected state lock for state write"
@@ -477,29 +476,57 @@ pixied_state_load_active() {
     return 0
 }
 
+# @description Return the lock path for the current installation.
+# This is a short-lived lock, unrelated to a runtime lease: a running runtime
+# holds no lock, so liveness is expressed only through lib/lease.sh. The lock is
+# held briefly during install/uninstall state writes and runtime-start
+# synchronization. NFS installations keep the state registry shared but isolate
+# locks by machine. Local installations retain the historical state-root lock
+# path.
+#
+# @stdout The canonical lock path.
+# @exitcode 0 When the required state path is available.
+# @exitcode 1 When the lock path cannot be determined.
+# @see pixied_lease_dir
+pixied_state_lock_path() {
+    local state_dir=${PIXIED_STATE_DIR:-} machine_state_dir=${PIXIED_MACHINE_STATE_DIR:-}
+    if [ "${PIXIED_HOME_MODE:-local}" = nfs ]; then
+        if [ -z "$machine_state_dir" ] && [ -n "${PIXIED_MACHINE_ID:-}" ] && [ -n "$state_dir" ]; then
+            machine_state_dir="$state_dir/machines/$PIXIED_MACHINE_ID"
+        fi
+        [ -n "$machine_state_dir" ] || pixied_die "machine state directory is not set"
+        printf '%s/.lock' "$machine_state_dir"
+    else
+        [ -n "$state_dir" ] || pixied_die "state directory is not set"
+        printf '%s/.lock' "$state_dir"
+    fi
+}
+
 # @description Acquire the state lock as a directory.
 # Validates the parent directory, creates the lock with mkdir, and
 # protects its permissions.
 #
-# @arg $1 string The lock directory path (defaults to $PIXIED_STATE_DIR/.lock)
+# @arg $1 string The lock directory path (local mode defaults to
+# $PIXIED_STATE_DIR/.lock; NFS mode always uses the current machine state lock)
 # @set PIXIED_STATE_LOCK_DIR string The path of the acquired lock directory
 # @exitcode 0 On success
 # @exitcode 1 When the lock could not be acquired
 # @see pixied_validate_owned_path
 pixied_state_lock_acquire() {
     local lock_dir=${1:-${PIXIED_STATE_DIR:-}/.lock} parent message
-    lock_dir=$(pixied_validate_canonical_path "$lock_dir")
+    if [ -z "$lock_dir" ] || {
+        [ "${PIXIED_HOME_MODE:-local}" = nfs ] &&
+            [ "$lock_dir" = "${PIXIED_STATE_DIR:-}/.lock" ]
+    }; then
+        lock_dir=$(pixied_state_lock_path)
+    fi
     parent=${lock_dir%/*}
     [ -d "$parent" ] || pixied_die "state lock parent does not exist: $parent"
     pixied_validate_owned_path "$parent"
     if [ -e "$lock_dir" ]; then
         message="state lock already exists: $lock_dir"
-        message+=$'\nThe PixiEden runtime may still be active, or the lock may be stale.'
-        message+=$'\nIf you use Zellij, a detached session also blocks uninstall:'
-        message+=$'\n  1. Check: zellij list-sessions --no-formatting'
-        message+=$'\n  2. End the managed session: zellij delete-session pixied'
-        message+=$'\nAfter no PixiEden runtime or managed Zellij session remains:'
-        message+=$'\n  3. Remove only the empty stale lock: rmdir -- '
+        message+=$'\nAnother PixiEden install or uninstall may be writing state right now. If no such process is running, remove only the empty lock directory:'
+        message+=$'\n  rmdir -- '
         message+="'$lock_dir'"
         message+=$'\nDo not use rm -rf.'
         pixied_die "$message"
@@ -514,47 +541,12 @@ pixied_state_lock_acquire() {
     PIXIED_STATE_LOCK_DIR=$lock_dir
 }
 
-# @description Adopt the state lock already held by the active runtime.
-# When uninstall runs inside an active PixiEden runtime, the launching runtime
-# process already holds the state lock. A second acquire would fail because the
-# lock directory exists, so this reuses the existing lock instead of creating a
-# competing one. The adopted lock is marked borrowed so cleanup never removes
-# the runtime's lock; the runtime releases it when its shell exits.
-#
-# Entry condition: only call from an active runtime where PIXIED_ACTIVE_RUNTIME=1.
-#
-# @set PIXIED_STATE_LOCK_DIR string The existing lock directory.
-# @set PIXIED_STATE_LOCK_BORROWED integer 1 while the lock is borrowed.
-# @exitcode 0 When the existing runtime lock is adopted.
-# @exitcode 1 When the runtime lock is missing or invalid.
-pixied_state_lock_adopt_active() {
-    local lock_dir parent
-    lock_dir=$(pixied_validate_canonical_path "${PIXIED_STATE_DIR:-}/.lock")
-    parent=${lock_dir%/*}
-    [ -d "$parent" ] || pixied_die "state lock parent does not exist: $parent"
-    pixied_validate_owned_path "$parent"
-    if [ ! -e "$lock_dir" ] && [ ! -L "$lock_dir" ]; then
-        pixied_die "active runtime state lock is missing; the runtime may have exited: $lock_dir"
-    fi
-    [ -d "$lock_dir" ] || pixied_die "active runtime state lock is not a directory: $lock_dir"
-    [ ! -L "$lock_dir" ] || pixied_die "active runtime state lock is a symlink: $lock_dir"
-    pixied_validate_owned_path "$lock_dir"
-    PIXIED_STATE_LOCK_DIR=$lock_dir
-    PIXIED_STATE_LOCK_BORROWED=1
-    export PIXIED_STATE_LOCK_BORROWED
-}
-
 # @description Release the held state lock.
-# Returns immediately when no lock is held. A borrowed lock (adopted from the
-# active runtime) is left in place so the runtime releases it on exit.
+# Returns immediately when no lock is held.
 #
 # @set PIXIED_STATE_LOCK_DIR string Becomes an empty string after release
 pixied_state_lock_release() {
     [ -n "$PIXIED_STATE_LOCK_DIR" ] || return 0
-    if [ "${PIXIED_STATE_LOCK_BORROWED:-0}" = 1 ]; then
-        PIXIED_STATE_LOCK_DIR=""
-        return 0
-    fi
     pixied_run rmdir -- "$PIXIED_STATE_LOCK_DIR"
     PIXIED_STATE_LOCK_DIR=""
 }

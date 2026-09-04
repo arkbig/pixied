@@ -39,7 +39,7 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 - システム全体へのPixi、開発ツールの導入
 - Bash以外のshell hook
 - 既存のPixi、`PIXI_HOME`、Pixi Global環境、shell設定の自動変更
-- home全体、credential、`.config`全体、Pixi cache、machine stateの同期
+- home全体、credential、`.config`全体、Pixi cache、machine-local payload、lock、実行中sessionの同期
 - 明示確認なしの`/etc/wsl.conf`変更やPixiEdenによる`wsl --shutdown`
 
 ## 成功定義と指標
@@ -57,7 +57,7 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 
 ## 再現範囲
 
-machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、生成した`.envrc`・DevContainer・Dockerfile、およびNFS modeで許可した8つのshell設定ファイルである。Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中session、machineごとのstateは共有せず、各machineで再構築する。
+machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、生成した`.envrc`・DevContainer・Dockerfile、NFSのstate registryとaccount側dispatcher、およびNFS modeで許可した8つのshell設定ファイルである。state file、runtime payload、lock、Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中sessionは共有せず、各machineで再構築する。
 
 したがってPixiEdenが保証するのは「同じ定義から専用runtimeとプロジェクト環境を再構築できること」であり、別machineへZellijの画面や未同期の作業状態を移動することではない。Zellijの再接続は同じmachine上でsessionが残っている場合に限る。
 

@@ -377,6 +377,35 @@ pixied_options_validate_state_transition() {
     fi
 }
 
+# @description Reject an old NFS state that still stores runtime payloads on the account home.
+# The current NFS layout keeps data and config under the machine-local home. An
+# explicit XDG data or config home remains supported as a deliberate shared
+# override, but an unqualified legacy state must be uninstalled before reinstall.
+#
+# @exitcode 0 When the state uses the current layout or an explicit override.
+# @exitcode 1 When the legacy layout requires uninstall and reinstall.
+pixied_options_reject_legacy_nfs_state() {
+    [ "${PIXIED_STATE[home_mode]:-}" = nfs ] || return 0
+    local local_home path key legacy_paths=""
+    local_home=$(pixied_canonical_path "${PIXIED_STATE[local_home]}")
+    for key in data_dir config_dir; do
+        path=$(pixied_canonical_path "${PIXIED_STATE[$key]}")
+        case "$path/" in
+        "$local_home/"*) continue ;;
+        esac
+        case "$key" in
+        data_dir) [ -n "${XDG_DATA_HOME:-}" ] && continue ;;
+        config_dir) [ -n "${XDG_CONFIG_HOME:-}" ] && continue ;;
+        esac
+        if [ -n "$legacy_paths" ]; then
+            legacy_paths+="; "
+        fi
+        legacy_paths+="$key=$path"
+    done
+    [ -z "$legacy_paths" ] ||
+        pixied_die "existing NFS state uses legacy shared runtime paths ($legacy_paths); run 'pixied uninstall --yes' on this machine, then reinstall with --home-mode nfs --local-home PATH"
+}
+
 # @description Reject active-runtime install options that change the verified identity.
 # Only acts within an active runtime where the verified state is the source of
 # truth. For each explicitly supplied option (home mode, local home, session
@@ -458,9 +487,9 @@ pixied_options_apply_defaults() {
 
 # @description Seed installation defaults from the most recently installed peer machine.
 # When a fresh machine installs in NFS mode and at least one sibling machine
-# state already exists, the newest peer's configuration is used as the default
-# for home mode, local home, and session manager. Machine identity (machine id
-# and account home) is never inherited because every machine keeps its own.
+# state already exists, the newest peer's shared configuration is used as the
+# default for home mode and session manager. Machine identity, account home,
+# and local home are never inherited because every machine keeps its own.
 #
 # Peer selection reads the sibling state files under the machines directory and
 # picks the one with the newest modification time. Each candidate is validated
@@ -470,11 +499,10 @@ pixied_options_apply_defaults() {
 # process state.
 #
 # @set PIXIED_HOME_MODE string Defaulted from the latest NFS peer when not explicit.
-# @set PIXIED_LOCAL_HOME string Defaulted from the latest NFS peer when not explicit.
 # @set PIXIED_SESSION_MANAGER string Defaulted from the latest NFS peer when not explicit.
 # @exitcode 0 Always.
 pixied_options_apply_peer_defaults() {
-    local machines_dir mtime_list peer_file line peer_home_mode peer_local_home peer_session extracted rest
+    local machines_dir mtime_list peer_file line peer_home_mode peer_session extracted
 
     [ "${PIXIED_HOME_MODE:-}" = nfs ] || return 0
     machines_dir=${PIXIED_STATE_DIR}/machines
@@ -494,30 +522,18 @@ pixied_options_apply_peer_defaults() {
         # this install and cannot populate the current process PIXIED_STATE.
         extracted=$(
             pixied_state_load_external "$peer_file" &&
-                printf '%s|%s|%s\n' \
+                printf '%s|%s\n' \
                     "${PIXIED_STATE[home_mode]:-}" \
-                    "${PIXIED_STATE[local_home]:-}" \
                     "${PIXIED_STATE[session_manager]:-}"
         ) || continue
         peer_home_mode=${extracted%%|*}
-        rest=${extracted#*|}
-        peer_local_home=${rest%%|*}
-        peer_session=${rest#*|}
+        peer_session=${extracted#*|}
         # Only seed from a peer that also ran in NFS mode so the defaults stay
-        # consistent with the requested installation.
+        # consistent with the requested installation. The local home is never
+        # inherited because it is machine-local by definition.
         [ "$peer_home_mode" = nfs ] || continue
         if ! pixied_options_is_explicit home_mode; then
             export PIXIED_HOME_MODE=$peer_home_mode
-        fi
-        if ! pixied_options_is_explicit local_home; then
-            export PIXIED_LOCAL_HOME=$peer_local_home
-            # pixied_resolve_paths already derived PIXIED_PIXI_HOME from the
-            # default local home; drop it so the later resolve recomputes the
-            # dedicated Pixi home from the seeded local home. An explicitly
-            # supplied pixi home is always preserved.
-            if ! pixied_options_is_explicit pixi_home; then
-                unset PIXIED_PIXI_HOME
-            fi
         fi
         if ! pixied_options_is_explicit session_manager; then
             export PIXIED_SESSION_MANAGER=$peer_session

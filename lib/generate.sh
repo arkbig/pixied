@@ -104,7 +104,11 @@ pixied_generate_validate_definition() {
 # @exitcode 1 When the current CLI path is unavailable.
 pixied_generate_cli_command() {
     local cli_path
-    cli_path=$(pixied_validate_canonical_path "$PIXIED_BIN_DIR/pixied")
+    if [ "${PIXIED_HOME_MODE:-local}" = nfs ]; then
+        cli_path=$(pixied_validate_canonical_path "$PIXIED_COMMAND_BIN/pixied")
+    else
+        cli_path=$(pixied_validate_canonical_path "$PIXIED_BIN_DIR/pixied")
+    fi
     [ -x "$cli_path" ] || return 1
     printf '%q' "$cli_path"
 }

@@ -29,6 +29,8 @@ readonly PIXIED_ROOT
 . "$PIXIED_ROOT/lib/paths.sh"
 # shellcheck source=lib/state.sh
 . "$PIXIED_ROOT/lib/state.sh"
+# shellcheck source=lib/lease.sh
+. "$PIXIED_ROOT/lib/lease.sh"
 # shellcheck source=lib/options.sh
 . "$PIXIED_ROOT/lib/options.sh"
 # shellcheck source=lib/pixi.sh
@@ -61,6 +63,8 @@ Commands:
     generate devcontainer  Generate a DevContainer definition
     generate dockerfile    Generate a Dockerfile
     uninstall              Remove the PixiEden installation.
+                           --force downgrades active-runtime lease and
+                           resident Zellij session checks to warnings.
     help                   Show this help.
     version                Print the PixiEden version.
 
@@ -219,6 +223,8 @@ pixied_confirm_pixi_home() {
 # @see pixied_state_lock_acquire
 # @see pixied_state_load
 # @see pixied_state_initialize_from_paths
+# @see pixied_lease_sweep
+# @see pixied_lease_other_active
 pixied_install() {
     local state_exists=0 created_data=0 created_pixi_home=0
 
@@ -251,6 +257,7 @@ pixied_install() {
     if [ -e "$PIXIED_STATE_FILE" ] || [ -L "$PIXIED_STATE_FILE" ]; then
         pixied_state_load "$PIXIED_STATE_FILE"
         state_exists=1
+        pixied_options_reject_legacy_nfs_state
         pixied_options_validate_state_transition
         pixied_options_apply_state
         pixied_resolve_paths
@@ -269,14 +276,21 @@ pixied_install() {
     pixied_step "Preparing the dedicated Pixi environment for $PIXIED_MACHINE_ID"
     pixied_run mkdir -p -- "$PIXIED_STATE_DIR" "$PIXIED_MACHINE_STATE_DIR" "$PIXIED_CONFIG_DIR"
     pixied_ensure_local_home_bin
-    # Inside an active runtime the launching process already holds the state lock,
-    # so acquiring a fresh lock would fail. Adopt the existing lock instead, and
-    # leave it for the runtime to release on exit. From outside the runtime an
-    # install may still find a stale lock, which must remain a hard error.
-    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
-        pixied_state_lock_adopt_active
-    else
-        pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    # The runtime no longer holds the state lock, so install always acquires a
+    # fresh short lock; a real contention means another install/uninstall is
+    # writing state and must remain a hard error. Afterwards, sweep stale
+    # leases and warn (non-fatally) when a foreign runtime is still alive.
+    # Ancestor-chain leases (this process's own runtime) are excluded so a
+    # reinstall from inside a running shell stays quiet, matching uninstall.
+    pixied_state_lock_acquire "$PIXIED_STATE_DIR/.lock"
+    pixied_lease_sweep
+    pixied_lease_other_active >/dev/null
+    if [ "${PIXIED_LEASE_OTHER_COUNT:-0}" -gt 0 ]; then
+        local lease_message="PixiEden is reinstalled while another runtime is active on this machine:"
+        lease_message+=$'\n'
+        lease_message+=$(pixied_lease_format_entries "${PIXIED_LEASE_OTHER_LIST[@]}")
+        lease_message+=$'\nThe running runtime keeps its loaded environment; open a new shell or session to use the reinstalled files.'
+        pixied_warn "$lease_message"
     fi
     if [ "$state_exists" -eq 1 ]; then
         pixied_state_load "$PIXIED_STATE_FILE"
@@ -363,7 +377,11 @@ pixied_print_next_steps() {
     local launcher launcher_literal body body_literal start_cmd
     launcher="$PIXIED_COMMAND_BIN/pixied"
     printf -v launcher_literal '%q' "$launcher"
-    body="$PIXIED_DATA_DIR/bin/pixied"
+    if [ "${PIXIED_HOME_MODE:-local}" = nfs ]; then
+        body=$launcher
+    else
+        body="$PIXIED_DATA_DIR/bin/pixied"
+    fi
     printf -v body_literal '%q' "$body"
     if command -v pixied >/dev/null 2>&1; then
         start_cmd="pixied"
