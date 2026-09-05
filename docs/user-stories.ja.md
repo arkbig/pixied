@@ -117,7 +117,7 @@
    **Then**専用runtimeの対話Bashが起動する。
 2. **Given**session managerが`zellij`で既存セッションがある
    **When**`pixied shell`を実行する
-   **Then**既存のmachine-id付きセッションへ接続する。
+   **Then**既存の`pixied`sessionへ接続する。
 3. **Given**session managerが`zellij`で既存セッションがない
    **When**`pixied shell`を実行する
    **Then**初回セッションを作成して接続する。
@@ -138,13 +138,13 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 
 1. **Given**利用者が`nfs` modeと有効なmachine-local homeを選択している
    **When**installを実行する
-   **Then**runtimeのdata、config、専用`PIXI_HOME`、lockがmachine-local領域に配置され、state registryとshared dispatcherはaccount側に配置される。
+   **Then**runtimeのdata、config、専用`PIXI_HOME`、短時間lockとleaseがmachine-local領域に配置され、state registryとshared dispatcherはaccount側に配置される。
 2. **Given**NFS modeでUC-04またはUC-05を開始する
    **When**runtimeを開始する
-   **Then**`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけがpullされる。
-3. **Given**child commandまたはsessionがstatus `0`で終了する
+   **Then**`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけが`account→local`の一方向`reconcile`で同期される。
+3. **Given**child commandまたはsessionが終了する
    **When**runtimeを終了する
-   **Then**allowlistの変更だけがaccount homeへpushされる。
+   **Then**account homeへ書き戻さず、終了statusにかかわらず追加の同期を行わない。
 4. **Given**account側とlocal側の双方に異なる変更がある
    **When**同期を実行する
    **Then**片側を黙って上書きせず、利用者が確認できる状態を保つ。
@@ -201,7 +201,7 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
    **Then**プロジェクト定義から再現可能なコンテナ定義を生成できる。`generate devcontainer`は`pixi.toml`または`pyproject.toml`のいずれでも動作し、`generate dockerfile`は`pixi.toml`を必須とする（pyproject.tomlのみは非対応）。
 4. **Given**対象の生成ファイルが既に存在する
    **When**`pixied generate`を実行する
-   **Then**`generate devcontainer`/`generate dockerfile`は既定で上書きせずエラーで終了し、`--force`で上書き（直前のファイルを`<name>.bak`へ1世代backup）する。`generate direnv`は既存`.envrc`へ重複なくブロックを挿入し、`--force`を無視する。
+   **Then**`generate devcontainer`/`generate dockerfile`は既定で上書きせずエラーで終了し、`--force`で上書き(直前のファイルを`<name>.bak`へ1世代backup)する。`generate direnv`は既存`.envrc`へ重複なくブロックを挿入するため、`--force`を指定しても無視して同じ結果になる。
 5. **Given**生成されたコンテナ定義を利用する
    **When**DevContainerまたはDockerでプロジェクトを起動する
    **Then**グローバルPixiの前提とプロジェクトPixiの依存関係が分離され、ホストのPixi環境を変更しない。
@@ -234,7 +234,7 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
    **Then**`cannot change session manager during reinstall; run uninstall first`を出力して却下する。
 5. **Given**`zellij`のアクティブruntime shellがある
    **When**`pixied uninstall`を実行する
-   **Then**`cannot uninstall from an active Zellij runtime; detach the managed Zellij session (exit the runtime shell) and rerun the uninstall`を出力して却下する。
+   **Then**`cannot uninstall from an attached Zellij runtime session; detach the managed Zellij session (exit the session) and rerun the uninstall`を出力して却下する。
 6. **Given**アクティブruntime shellでinstall/uninstallを実行した
    **When**stateが更新されたあと`exit`でruntime shellを抜け、runtimeを再起動または再attachする
    **Then**現在のsessionが保持していた環境は変えず、再評価したruntimeにのみ新しい設定が反映される。

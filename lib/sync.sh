@@ -157,35 +157,6 @@ pixied_sync_copy_atomic() {
         pixied_die "sync destination hash verification failed: $destination"
 }
 
-# @description Remove one allowlisted file after validating its ownership.
-# An in-bounds symlink is the managed entry itself: only the link is removed,
-# never the file it points to, so an owned dotfile repository is untouched.
-# Symlink targets are dereferenced only on copy, where the real content is
-# synchronized. Accepted symlinks produce neither an error nor a warning.
-#
-# @arg $1 string The destination file path.
-# @exitcode 0 When the file is absent or removed.
-# @exitcode 1 When the destination is unsafe or cannot be removed.
-pixied_sync_remove_file() {
-    local path=$1 resolved
-    resolved=$(pixied_sync_resolve_file_path "$path" "$PIXIED_ACCOUNT_HOME")
-    if [ ! -e "$path" ] && ! [ -L "$path" ]; then
-        return 0
-    fi
-    if [ -L "$path" ]; then
-        : # remove the symlink entry directly below
-    elif ! [ -f "$path" ]; then
-        pixied_die "sync removal target is not a regular file: $path"
-    fi
-    # Ownership and mount checks use the resolved target so an in-bounds symlink
-    # entry is removed without dereferencing (deletion targets the link only).
-    pixied_validate_owned_path "$resolved"
-    pixied_run rm -f -- "$path"
-    if [ -e "$path" ] || [ -L "$path" ]; then
-        pixied_die "could not remove sync target: $path"
-    fi
-}
-
 # @description Reconcile the allowlist using an account-authoritative policy.
 # The account home is treated as the source of truth. An account file that has
 # no local copy seeds the local home. A local copy is never overwritten, so a

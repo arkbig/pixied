@@ -47,8 +47,7 @@ pixied_runtime_apply_state() {
     local key
     for key in state_version machine_id account_home home_mode local_home session_manager \
         data_dir config_dir state_dir command_bin pixi_home pixi_binary_path \
-        pixi_binary_hash direnv_path direnv_hash runtime_hook_path runtime_hook_hash \
-        sync_baseline; do
+        pixi_binary_hash direnv_path direnv_hash runtime_hook_path runtime_hook_hash; do
         pixied_state_has "$key" || pixied_die "runtime state key is missing: $key"
     done
 
@@ -68,7 +67,6 @@ pixied_runtime_apply_state() {
     export PIXIED_DIRENV_HASH=${PIXIED_STATE[direnv_hash]}
     export PIXIED_RUNTIME_HOOK_PATH=${PIXIED_STATE[runtime_hook_path]}
     export PIXIED_RUNTIME_HOOK_HASH=${PIXIED_STATE[runtime_hook_hash]}
-    export PIXIED_SYNC_BASELINE=${PIXIED_STATE[sync_baseline]}
     if pixied_state_has zellij_path; then
         export PIXIED_ZELLIJ_PATH=${PIXIED_STATE[zellij_path]}
     else
@@ -97,10 +95,6 @@ pixied_runtime_validate_state() {
     expected=$(pixied_canonical_path "${PIXIED_STATE[config_dir]}/runtime-hook.bash")
     [ "${PIXIED_STATE[runtime_hook_path]}" = "$expected" ] ||
         pixied_die "runtime hook path is outside the dedicated config directory"
-    expected=$(pixied_canonical_path \
-        "${PIXIED_STATE[state_dir]}/machines/${PIXIED_STATE[machine_id]}/sync-baseline")
-    [ "${PIXIED_STATE[sync_baseline]}" = "$expected" ] ||
-        pixied_die "runtime sync baseline path is outside the machine state directory"
     [ -n "${PIXIED_STATE[pixi_binary_hash]}" ] ||
         pixied_die "runtime Pixi binary hash is missing"
     [ -n "${PIXIED_STATE[direnv_hash]}" ] ||

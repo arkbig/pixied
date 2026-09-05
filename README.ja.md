@@ -6,107 +6,78 @@
 
 PixiEdenは[Pixi](https://github.com/prefix-dev/pixi/)ベースの開発環境構築ツールです。コマンド名は`pixied`。
 
-PixiEdenは、WSL2などのローカル環境から、ホームディレクトリがNFS共有されている非特権（root権限なし）サーバーまで、同じ定義から再構築できるPixi開発runtimeを提供します。
-Pixi, direnv, Zellijを組み合わせ、I/O負荷の高いネットワークホームを避けてデータをマシンローカルストレージへ逃がす構成を採用します。これにより、管理者権限がないリモート環境でも日常的なシェル操作の遅延を解消し、快適な開発体験を実現します。
+PixiEdenは、WSL2などのローカル環境から、ホームディレクトリがNFS共有されている非特権(root権限なし)サーバーまで、同じ定義からPixi開発runtimeを再構築できます。
+Pixi、direnv、Zellijを組み合わせ、I/O負荷の高いネットワークホームを避けてデータをマシンローカルストレージへ逃がします。
 
-対象となる環境は次の2つです。
+対象は次の2つです。
 
-- ローカル環境（WSL2を含む）
+- ローカル環境(WSL2を含む)
 - ホームディレクトリがNFS等の共有ストレージ上にある非特権ホスト
 
 ## こんな用途に向いています
 
 - ノートPC、WSL、リモートLinuxで同じ設定から環境を再構築したい
-- 導入するツールをリストで管理したい
 - `$HOME`がNFSで、開発ツールの動作が遅い・壊れやすい
 - 同じmachineで再接続や再起動後も残ったZellij sessionへ戻りたい
 
 ## 主要機能
 
 - グローバルの開発runtimeを構築
-  + SSHで接続する非特権ユーザー＆NFS共有ホームディレクトリでも環境を構築可能
-  + 自動的にruntimeに入り、同じmachineに残ったZellij sessionを復元
+  + 同じmachineに残ったZellij sessionへ再接続
 - プロジェクトごとのPixi環境を構築
   + グローバルPixi環境の上にプロジェクトPixi環境を重ねて利用可能
   + DevContainerまたはDocker用の定義を生成可能
 
 ## クリックスタート
 
-最新Releaseからインストール:
+最新Releaseからインストールする。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh | bash
 ```
 
-このremote installerはGitHub Releasesの`pixied.tar.gz`を一時展開し、archive内の`install-local.sh`を実行します。Releaseの取得先を変更する場合は`PIXIED_RELEASE_URL`を指定できます。
-
-クローン済みリポジトリからインストール:
+クローン済みリポジトリからインストールする。
 
 ```bash
 ./install-local.sh
 ```
 
-インストール時にPixiEdenはシェル設定を自動編集しません。インストーラーが表示したCLIのフルパスを使い、Bashの場合は次の3行を`~/.bashrc`の一番先頭へ、zshの場合は`hook zsh`に置き換えて`~/.zshrc`の一番先頭へ追加してください（非対話時にも処理する場所）。XDGの既定値では`${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`です。
+PixiEdenはシェル設定を自動編集しません。インストーラーに表示される手順に従い、`~/.bashrc`の一番先頭へhookを追加する。zshでは`~/.zshrc`へ`hook zsh`で追加する。
 
 ```bash
-if command -v "${XDG_BIN_HOME:-$HOME/.local/bin}/pixied" >/dev/null 2>&1; then
+if [ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/pixied" ]; then
     eval "$(${XDG_BIN_HOME:-$HOME/.local/bin}/pixied hook bash)"
 fi
 ```
 
-zshでは、同じブロックを`~/.zshrc`へ追加し、`hook bash`を`hook zsh`に置き換えます。
+新しいターミナルやSSHセッションを開くと専用runtimeが有効になる。Zellijを有効にした場合は専用の`pixied`sessionへattachまたは作成する。
 
-新しいターミナルまたはSSHセッションを開くと、必要に応じてローカルホームへ切り替え、Pixi Globalを有効化します。Zellijを有効にした場合は、PixiEden runtime内から専用の`pixied` Zellij sessionへ直接attachまたは作成します。
-
-## インストール設定
-
-設定は、CLI引数、サポート対象の環境変数、現在のmachineの保存済みstate、自動検出、固定された既定値の順に解決します。
-
-- Home モード: `df -l`でローカルファイルシステムと確認できれば`local`、それ以外は`nfs`。
-- ローカルホーム: `nfs`モードで実行時に使う、事前に作成済みのmachine-localパス。
-- セッションマネージャ: 既定値は`zellij`。`none`を選ぶとPixiEden runtime内で専用のinteractive Bashを起動します。`zellij`を選ぶと専用の`pixied` sessionへ直接attachします。
-
-PixiEdenは、非ローカルな専用Pixi homeを使い続ける場合や、管理対象をuninstallする場合に確認を求めることがあります。`--yes`はこれらの確認だけを省略し、path、owner、hash、machine-idの検証は省略しません。
-
-セッションマネージャを無効にした場合、環境導入後は通常のシェルを起動します。自動接続とターミナル作業の永続化が必要になったら、次で再インストールしてください。
+NFS共有ホームで使う場合は、install前にmachine-localなdirectoryを事前に作成しておく。PixiEdenは作成しません。
 
 ```bash
-pixied install --session-manager zellij
+mkdir -p /scratch/$USER
+./install-local.sh --home-mode nfs --local-home /scratch/$USER
 ```
 
-設定を事前に指定し、確認を省略する場合は次のように実行します。
-
-```bash
-./install-local.sh \
-  --home-mode nfs \
-  --local-home /scratch/$USER \
-  --session-manager none \
-  --yes
-```
-
-環境変数で指定する場合は`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`を使います。`PIXIED_SESSION_MANAGER`には`zellij`または`none`を指定します。`--yes`を付けると確認を省略できます。
-
-Pixiのバージョンを指定する場合は`PIXIED_PIXI_VERSION`を使います。未指定時はPixiEdenが固定したバージョンを使い、組み込みdigestで検証します。versionを指定した場合や`latest`を指定した場合は、ユーザーが選択したReleaseを使い、同じReleaseから取得した公式checksumでダウンロード内容の破損・取り違えを検知します。チェックサムを明示的に固定したい場合は`PIXIED_PIXI_SHA256`で上書きできます。
-
-複数machineでstateの識別子を明示する高度な設定には`PIXIED_MACHINE_ID`を使います。machineごとに一意で、pathの一部として安全な値を指定してください。省略すると`/etc/machine-id`、またはPixiEdenのfallback検出値を使います。
+設定は対話wizardで確認する。非対話で進める場合は`--yes`を使う。optionの一覧は`pixied install --help`で確認する。
 
 ## コマンド
 
 ```text
-pixied                       shellサブコマンドへのエイリアス
-pixied shell                 NFS同期（必要時）を行い、セッションへ接続
-pixied run <command...>      NFS同期（必要時）を行い、専用環境でcommandを実行
+pixied                       shellへのエイリアス
+pixied shell                 セッションへ接続
+pixied run <command...>      専用環境でcommandを実行
 pixied hook <bash|zsh>       シェル初期化コードを出力
-pixied install [...]         環境をインストールまたは修復
-pixied uninstall             検証済みのPixiEden管理対象を整理
-pixied generate direnv       プロジェクトPixi環境用の.envrcを生成
-pixied generate devcontainer DevContainer用の定義を生成
-pixied generate dockerfile   Dockerfileを生成
+pixied install               環境をインストールまたは修復
+pixied uninstall             PixiEden管理対象を整理
+pixied generate <format>     プロジェクト連携ファイルを生成
 pixied help                  ヘルプ表示
 pixied version               バージョン表示
 ```
 
-プロジェクトrootで次を実行すると、グローバルPixiEden環境を土台にプロジェクトPixi環境を使うためのファイルを生成できます。
+詳細なoptionは`pixied --help`、`pixied <command> --help`で確認する。`install-local.sh --help`も`pixied install`と同じoptionを受け付ける。
+
+プロジェクトrootで次を実行すると、プロジェクトPixi環境を使うためのファイルを生成できる。
 
 ```bash
 pixied generate direnv
@@ -114,111 +85,27 @@ pixied generate devcontainer
 pixied generate dockerfile
 ```
 
-`direnv`の生成物はプロジェクトディレクトリに入ったときだけプロジェクトPixi環境を有効化します。DevContainerとDockerfileの生成物は、プロジェクトの`pixi.toml`を基にコンテナ内へプロジェクトPixi開発環境を構築します（ボリュームマウント前提）。
+`direnv`はプロジェクトディレクトリに入ったときだけプロジェクトPixi環境を有効化する。DevContainerとDockerfileは、プロジェクトの`pixi.toml`を基にコンテナ内へ開発環境を構築する(ボリュームマウント前提)。
 
-## 再現される範囲
+## NFS共有ホームでの注意
 
-machine間で再現されるのは、PixiEdenの設定、固定Pixi version、プロジェクト定義、生成したプロジェクト連携ファイルです。NFS modeではいくつかのshell設定ファイルもallowlistに従って同期されます。Pixi cache、解決済みバイナリ、machine-localな`PIXI_HOME`、実行中のZellij session、machineごとのstateはmachine間で共有されません。Zellijの再接続は、同じmachine上にsessionが残っている場合だけ行われます。
+`nfs`modeで使うlocal homeはinstall前に作成しておく。PixiEdenは自動作成しない。`install`は存在、owner、書込み権限、account homeとの分離、local filesystem条件を検証するだけである。
 
-## 動作モードと権限
-
-|home mode|session manager|保証される機能|必要な条件・権限|
-|---|---|---|---|
-|`local`|`none`|通常home上の専用runtime、direnv、プロジェクトPixi、DevContainer/Docker生成||
-|`local`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|PixiEden runtimeから直接attach。|
-|`nfs`|`none`|machine-local home上の専用runtime、ファイル同期、direnv、プロジェクトPixi、DevContainer/Docker生成|事前に作成したlocal homeのowner・書込み権限・local filesystem条件。|
-|`nfs`|`zellij`|上記に加え、同じmachine上のZellij sessionへ再接続|local homeの書込み権限。PixiEden runtimeから直接attach。|
-
-`none`では専用interactive Bashを起動し、Zellijは起動しません。`zellij`では`pixied shell`と生成されたhookがruntime内で`zellij attach --create pixied`を直接実行します。管理対象のZellij sessionが実行中の場合、終了するまでuninstallできません。別machineへZellijの画面や未同期の作業状態を移動する機能は提供しません。
-
-`nfs`modeで使う`PIXIED_LOCAL_HOME`は、install前に環境側で作成してください。指定pathは既存directoryであり、current userがownerで書込み可能、account homeと分離され、canonical pathとして検証できるlocal filesystem上にある必要があります。既定候補の`/local/$USER`もPixiEdenは自動作成しません。`install`はlocal homeを検証するだけで、local home作成用のサブコマンドも提供しません。
-
-local homeを事前に作成してもNFS同期は無効になりません。`nfs`modeではhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけをaccount homeとlocal homeの間で同期します。
-
-NFSモードの同期対象はhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけです。account homeを正として扱います。accountにあってlocalにないファイルは、`pixied shell`または`pixied run`の起動前にlocal homeへコピーします。
-
-### 同期エラーからの復旧
-
-lockが残っている場合も、自動削除は行いません。該当する`pixied`プロセスが停止していることを確認した後、空のlock directoryだけを削除してください。`nfs`modeではcurrent machineのlockを、local modeではstate rootのlockを対象にします。
-
-```bash
-rmdir -- "${PIXIED_STATE_DIR}/machines/${PIXIED_MACHINE_ID}/.lock"  # nfs
-rmdir -- "$PIXIED_STATE_DIR/.lock"                                  # local
-```
-
-実行中のprocessがある状態でlockを削除したり、lockに対して`rm -rf`を実行したりしないでください。
-
-detachしたZellij sessionは実行中のままであり、lockを保持していない場合でもuninstallを中止させます。次で管理対象sessionを確認して終了してから、再実行してください。
-
-```bash
-zellij list-sessions --no-formatting
-zellij delete-session pixied
-```
-
-## 動作要件
-
-- `bash`、`curl`または`wget`、`tar`を利用できるUbuntuまたは互換`Linux`。
-- セッションマネージャが`zellij`の場合だけZellijが必要です。ZellijはPixiEden runtime内から直接起動されます。
+NFS modeではhome直下の8ファイル(`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`)だけをaccount homeとlocal homeの間で同期する。account homeを正として扱い、`pixied shell`または`pixied run`の起動時に`account→local`の一方向でlocal homeへコピーする。終了時にaccount homeへ書き戻さない。
 
 ## アンインストール
 
-次を実行します。
+次を実行する。
 
 ```bash
 pixied uninstall
 ```
 
-uninstallは、current stateに記録された専用`PIXI_HOME`を管理境界にします。PixiEdenが新規作成した未共有の専用`PIXI_HOME`は、path、owner、stateを検証した後にdirectory単位で整理できます。既存pathまたは他machineと共有するpathでは、stateに記録されhashが一致する実行ファイルだけを整理し、共有Pixiのmetadata、manifest、`envs/`などは残る場合があります。PixiEdenはpackage単位の所有判定を行わず、現在のinstallが追加したGlobal packageだけを削除することも保証しません。
+最後に、追加したshell設定(`~/.bashrc`など)からPixiEdenのhookブロックを手動で削除する。
 
-対象の管理対象Zellij sessionが残っている場合、uninstallを中止します。エラーに表示されたZellij commandでsessionを確認し、`zellij delete-session pixied`で終了してから`pixied uninstall`を再実行してください。detachだけではsessionが残るため、uninstallはできません。session一覧を取得できない場合も安全側に中止します。
+## 動作要件
 
-最後に、追加したshell設定ファイル（`~/.bashrc`または`~/.zshrc`など）からPixiEdenのhookブロックを手動で削除してください。途中で中断した場合も、ランチャーまたは配備済みCLIが残っていれば`pixied uninstall`を再実行できます。
-
-## アクティブruntimeからの運用
-
-専用環境を有効化したshell（アクティブruntime）の中から`pixied install`や`pixied uninstall`を実行できます。ここでは**検証済みstate file**がidentityのsource of truthです。identityは`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からは再計算されません。
-
-アクティブruntimeは`PIXIED_RUNTIME_HOOK_ACTIVE=1`と、絶対正規化pathである`PIXIED_RUNTIME_STATE_FILE`（`<state_dir>/machines/<machine_id>/state`形式）の両方が揃ったときにのみ検出されます。state fileが不在または検証不能な場合、install/uninstallは次のように失敗します。
-
-```text
-active runtime state is missing or unverifiable; PixiEden refuses to change identity from an active runtime; re-source the runtime from a valid deployment
-```
-
-アクティブruntimeでは次のidentityを変更できません。`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`のいずれかを指定すると却下されます。
-
-```text
-active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')
-```
-
-reinstallでsession managerを変更しようとすると、次のように却下されます。
-
-```text
-cannot change session manager during reinstall; run uninstall first
-```
-
-install/uninstallは現在のsessionが保持する環境を変えずにstateを更新します。`exit`でruntime shellを抜けたあと、runtimeを再起動または再attachすると新しい設定が反映されます。
-
-```bash
-exit            # アクティブruntime shellから抜ける
-# runtimeを再起動 / 再attachして専用環境を再評価する
-```
-
-session managerが`zellij`のアクティブruntimeからはuninstallできません。管理対象Zellij sessionが接続中のためです。sessionをdetach（またはruntime shellを`exit`）してからuninstallを再実行してください。
-
-```text
-cannot uninstall from an active Zellij runtime; detach the managed Zellij session (exit the runtime shell) and rerun the uninstall
-```
-
-## パスと XDG 対応
-
-ここに示す`PIXIED_*`名は解決済みpathを説明するための名前であり、installの入力overrideとしてはサポートしません。文書化されたpathの場所を変更する場合は対応するXDG環境変数を使ってください。
-
-- `PIXIED_DATA_DIR`（データ、CLI、Pixi binary）: `nfs`modeでは`${XDG_DATA_HOME:-$PIXIED_LOCAL_HOME/.local/share}/pixied`、それ以外では`${XDG_DATA_HOME:-$HOME/.local/share}/pixied`
-- `PIXIED_CONFIG_DIR`（設定、生成runtime hook）: `nfs`modeでは`${XDG_CONFIG_HOME:-$PIXIED_LOCAL_HOME/.config}/pixied`、それ以外では`${XDG_CONFIG_HOME:-$HOME/.config}/pixied`
-- `PIXIED_STATE_DIR`（共有state registry）: `${XDG_STATE_HOME:-$HOME/.local/state}/pixied`
-- CLI launcher: `${XDG_BIN_HOME:-$HOME/.local/bin}/pixied`（`nfs`modeではshared dispatcher）
-- machine-local lock: `nfs`modeでは`$PIXIED_STATE_DIR/machines/$PIXIED_MACHINE_ID/.lock`、それ以外では`$PIXIED_STATE_DIR/.lock`
-- マシンローカルツールとPixi Globalデータ: `$PIXIED_LOCAL_HOME`
+- `bash`、`curl`または`wget`、`tar`を利用できるUbuntuまたは互換`Linux`。
 
 ## ドキュメント案内
 

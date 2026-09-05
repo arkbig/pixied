@@ -57,17 +57,15 @@ Commands:
     (no command)           Alias for shell.
     shell [options]        Attach to the PixiEden session.
     run <command>          Run a command in the PixiEden runtime.
-    install                Install the dedicated Pixi environment and verify state.
+    install [options]      Install the dedicated Pixi environment and verify state.
     hook <shell> [options] Print shell initialization code.
-    generate direnv        Generate a project .envrc
-    generate devcontainer  Generate a DevContainer definition
-    generate dockerfile    Generate a Dockerfile
-    uninstall              Remove the PixiEden installation.
-                           --force downgrades active-runtime lease and
-                           resident Zellij session checks to warnings.
+    generate <format> [options] Generate a project integration file.
+                           Formats: direnv, devcontainer, dockerfile.
+    uninstall [options]    Remove the PixiEden installation.
     help                   Show this help.
     version                Print the PixiEden version.
 
+Run `pixied <command> --help` for command options.
 Runtime activation uses the dedicated Pixi environment and starts an isolated child process.
 USAGE
 }
@@ -150,14 +148,21 @@ USAGE
 # Bash and zsh are supported. The runtime state and generated hook are
 # validated before source code is emitted. When --auto-attach is passed, the
 # runtime hook is regenerated so the resolved mode is baked into the sourced
-# file and persisted with the updated hook hash. When --help is passed, prints
+# file and persisted with the updated hook hash. The regeneration holds the
+# short state lock from pixied_state_lock_path across the hook write and the
+# state write, then releases it. When the state write fails, the previous hook
+# file is restored so no hash mismatch remains. When --help is passed, prints
 # the hook subcommand usage instead.
 #
 # @arg $@ string The shell name and runtime options
 # @exitcode 2 When the usage is invalid
 # @exitcode 1 When the installation or generated hook is invalid
 # @see pixied_hook_usage
+# @see pixied_state_lock_path
+# @see pixied_state_lock_acquire
+# @see pixied_state_lock_release
 pixied_hook() {
+    local runtime_path hook_backup
     pixied_options_parse_runtime "$@"
     if [ "${PIXIED_OPTIONS_HELP:-0}" -eq 1 ]; then
         pixied_hook_usage
@@ -172,8 +177,25 @@ pixied_hook() {
     esac
     pixied_runtime_load_state
     if [ "${PIXIED_OPTION_CLI_SET[auto_attach]:-0}" -eq 1 ]; then
+        runtime_path=$(pixied_hook_runtime_path)
+        hook_backup=""
+        pixied_state_lock_acquire "$(pixied_state_lock_path)"
+        if [ -f "$runtime_path" ] && [ ! -L "$runtime_path" ]; then
+            hook_backup=$(pixied_run mktemp --tmpdir="${runtime_path%/*}" .pixied-hook-backup.XXXXXX)
+            pixied_register_temp "$hook_backup"
+            pixied_run cp -p -- "$runtime_path" "$hook_backup"
+        fi
         pixied_hook_generate_runtime
-        pixied_state_write "$PIXIED_STATE_FILE"
+        if ! (pixied_state_write "$PIXIED_STATE_FILE" >/dev/null 2>&1); then
+            if [ -n "$hook_backup" ]; then
+                pixied_run cp -p -- "$hook_backup" "$runtime_path" >/dev/null 2>&1
+            else
+                pixied_run rm -f -- "$runtime_path" >/dev/null 2>&1
+            fi
+            pixied_state_lock_release
+            pixied_die "could not persist runtime hook state"
+        fi
+        pixied_state_lock_release
     fi
     pixied_hook_emit
 }
@@ -210,8 +232,29 @@ pixied_confirm_pixi_home() {
     esac
 }
 
+# @description Print the install subcommand usage to standard output.
+# @stdout The install command help message
+pixied_install_usage() {
+    cat <<'USAGE'
+Usage: pixied install [OPTIONS]
+
+Install the dedicated Pixi environment and verify state.
+
+Options:
+    --help                         Show this help.
+    --yes                          Skip interactive confirmation prompts.
+    --home-mode local|nfs          Select the account home mode.
+    --local-home PATH              Set the machine-local home used by NFS mode.
+    --session-manager none|zellij  Select the runtime session manager.
+    --machine-id ID                Set the machine-specific state identifier.
+
+Changing home mode, local home, session manager, or machine ID during
+reinstall is rejected; run uninstall first.
+USAGE
+}
+
 # @description Resolve PixiEden paths and create or verify state.
-# With --help, prints the help and exits successfully.
+# With --help, prints the install usage and exits successfully.
 # Otherwise resolves paths, creates the state directory, acquires the lock,
 # and then loads or initializes and writes the state.
 #
@@ -238,7 +281,7 @@ pixied_install() {
 
     pixied_options_parse "$@"
     if [ "${PIXIED_OPTIONS_HELP:-0}" -eq 1 ]; then
-        pixied_usage
+        pixied_install_usage
         return "$PIXIED_EXIT_OK"
     fi
 
@@ -257,7 +300,6 @@ pixied_install() {
     if [ -e "$PIXIED_STATE_FILE" ] || [ -L "$PIXIED_STATE_FILE" ]; then
         pixied_state_load "$PIXIED_STATE_FILE"
         state_exists=1
-        pixied_options_reject_legacy_nfs_state
         pixied_options_validate_state_transition
         pixied_options_apply_state
         pixied_resolve_paths
@@ -328,7 +370,6 @@ pixied_install() {
     pixied_state_set state_dir "$PIXIED_STATE_DIR"
     pixied_state_set command_bin "$PIXIED_COMMAND_BIN"
     pixied_state_set pixi_home "$PIXIED_PIXI_HOME"
-    pixied_state_set sync_baseline "$PIXIED_MACHINE_STATE_DIR/sync-baseline"
     pixied_pixi_install_binary
     if [ "${PIXIED_STATE[created_data]:-0}" -eq 1 ]; then
         created_data=1
@@ -406,12 +447,22 @@ EOF
 
 # @description Remove the current machine's PixiEden installation.
 # Validates ownership state and removes managed resources through quarantine.
+# When --help is passed, prints the uninstall subcommand usage instead.
 #
 # @arg $@ string Uninstall arguments.
 # @exitcode 0 When the installation is removed.
 # @exitcode 1 When confirmation, validation, or cleanup fails.
 # @exitcode 2 When an argument is invalid.
+# @see pixied_uninstall_usage
 pixied_uninstall() {
+    case " $* " in
+    *" --help "* | *" -h "* | *" -help "*)
+        if [ "$#" -eq 1 ]; then
+            pixied_uninstall_usage
+            return "$PIXIED_EXIT_OK"
+        fi
+        ;;
+    esac
     pixied_uninstall_run "$@"
 }
 

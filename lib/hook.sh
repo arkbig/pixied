@@ -192,7 +192,7 @@ PATH_RESULT
 
     case $- in
     *i*)
-        if [ -t 0 ] && [ -t 1 ] && [ -z "${CI:-}" ] &&
+        if [ "${PIXIED_AUTO_ATTACH:-auto}" != none ] && [ -t 0 ] && [ -t 1 ] && [ -z "${CI:-}" ] &&
             [ "$session_manager" = zellij ] && [ -z "${ZELLIJ:-}" ]; then
             if ! PIXIED_RUNTIME_HOOK_AUTOSTART=1 "$pixied_cli_path" shell; then
                 printf '%s\n' '[pixied] WARN automatic runtime start failed.' >&2

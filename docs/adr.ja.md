@@ -88,23 +88,23 @@ session managerは`none`または`zellij`から選択できるようにする。
 
 ## ADR-005
 
-child commandを待機してから終了処理を行う
+child commandを待機して終了statusを返す
 
 **Status**: Accepted
 
 ### Context
 
-NFS同期のpush可否はchild commandの終了statusに依存する。childを直接`exec`すると、そのstatusを回収して後処理を実行できない。
+終了statusは呼び出し元へ返す必要がある。childを直接`exec`すると、そのstatusを回収したあとに後処理を実行できない。
 
 ### Decision
 
-child commandをforegroundで待機し、終了statusを保持してから同期のfinish処理とstatus返却を行う。
+child commandをforegroundで待機し、終了statusを保持してからstatus返却を行う。NFS同期はruntime開始時の`account→local`の一方向`reconcile`だけであり、終了statusに応じた追加の同期は行わない。
 
 ### Rejected alternatives
 
-- childを直接`exec`する案: 終了statusを回収できず、正常終了時だけpushする契約を守れない。
+- childを直接`exec`する案: 終了statusを回収したあとに後処理を実行できず、status返却の契約を守れない。
 
-**Related**: [US-104](user-stories.ja.md#us-104)、[US-106](user-stories.ja.md#us-106)
+**Related**: [US-104](user-stories.ja.md#us-104)、[US-106](user-stories.ja.md#us-106)、[ADR-011](#adr-011)
 
 ## ADR-006
 
@@ -139,14 +139,14 @@ current machineのstate、canonical path、owner、hashを検証し、PixiEden�
 
 ### Decision
 
-`pixied generate <devcontainer|dockerfile|direnv>`と`pixied generate direnv --print-envrc`を提供する。`direnv`は、runtime hookまたは`pixied shell`/`pixied run`で`pixied`がPATH上にある場合はそのcommandを、それ以外では生成時のCLI絶対pathを使って専用Pixi runtimeからプロジェクトのshell hookを取得する。`--print-envrc`はactivation codeだけをstdoutへ出力し、ファイルは書き込まない。同期やsession起動は行わず、コンテナ向け形式はホストの`.pixi`を除外してプロジェクト全体を取り込んでからinstallし、プロジェクト定義から再現可能なコンテナ定義を生成する。既存ファイルは明示確認なしに上書きしない。
+`pixied generate <devcontainer|dockerfile|direnv>`と`pixied generate direnv --print-envrc`を提供する。`direnv`は、生成時のCLI絶対pathまたは`pixied`がPATH上にある場合はそのcommandを使って専用Pixi runtimeからプロジェクトのshell hookを取得する。`--print-envrc`はactivation codeだけをstdoutへ出力し、ファイルは書き込まない。同期やsession起動は行わず、プロジェクト定義から再現可能なコンテナ定義を生成する。既存ファイルは明示確認なしに上書きしない。
 
 ### Rejected alternatives
 
 - グローバルPixi環境へプロジェクト依存関係を常時追加する案: プロジェクト間の依存関係が混ざり、既存環境を変更する。
 - ホストの`pixi`や`PIXI_HOME`を直接使う案: PixiEdenの専用環境とプロジェクト環境の境界を検証できない。
 
-**Related**: [US-108](user-stories.ja.md#us-108)
+**Related**: [US-108](user-stories.ja.md#us-108)、[ADR-011](#adr-011)
 
 ## ADR-008
 
@@ -195,14 +195,37 @@ NFSのstate registryとruntime payloadを分離する
 
 ### Context
 
-account homeはmachine間で共有される一方、Pixiのdata、config、cache、lock、Zellij sessionはmachineごとに独立して扱う必要がある。同じlocal home文字列がhostごとに異なるlocal filesystemを指す場合、path文字列の一致だけでは共有resourceと判定できない。
+account homeはmachine間で共有される一方、Pixiのdata、config、cache、短時間lock、lease、Zellij sessionはmachineごとに独立して扱う必要がある。同じlocal home文字列がhostごとに異なるlocal filesystemを指す場合、path文字列の一致だけでは共有resourceと判定できない。
 
 ### Decision
 
-NFSでは`state_dir`とaccount側の`command_bin/pixied`だけを共有領域に置く。state fileは`machines/<machine-id>/state`へ分離し、data/config/専用`PIXI_HOME`とlockは`PIXIED_LOCAL_HOME`側へ配置する。共有launcherはcurrent machineのstateを読み、そのstateのlocal payloadへdispatchする。peer stateから`local_home`は継承しない。旧layoutのstateはshared runtimeを継続利用せず、uninstall後の再installを要求する。
+NFSでは`state_dir`とaccount側の`command_bin/pixied`だけを共有領域に置く。state fileは`machines/<machine-id>/state`へ分離し、data/config/専用`PIXI_HOME`と短時間lockとleaseは`PIXIED_LOCAL_HOME`側へ配置する。共有launcherはcurrent machineのstateを読み、そのstateのlocal payloadへdispatchする。peer stateから`local_home`は継承しない。
 
 ### Rejected alternatives
 
 - account homeのdata/configを共有し続ける案: machine間のruntime payloadとlockが同じ実体になり、独立性を保証できない。
 - stateとpayloadを同じ共有directoryに置く案: lock競合とlocal filesystemの性能問題をruntimeから分離できない。
 - peerの`local_home`を既定値として継承する案: 別hostのlocal filesystemを誤って参照する。
+
+**Related**: [ADR-011](#adr-011)
+
+## ADR-011
+
+leaseでruntime生存を分離し`--force`を警告降格に限定する
+
+**Status**: Accepted
+
+### Context
+
+短時間`lock`はinstall/uninstallのstate書込みとruntime開始時の`reconcile`だけが保持し、実行中runtimeは`lock`を保持しない。実行中runtimeの有無を`lock`残存で判定すると、staleな`lock`と実行中runtimeを区別できない。
+
+### Decision
+
+実行中runtimeの生存は`leases/`配下のlease fileで表し、短時間`lock`から分離する。`shell`/`run`は開始時にleaseを取得し、終了時に解放する。`install`/`uninstall`は`lease`を`sweep`し、staleなleaseは警告付きで自動除去する。他runtimeの生存中leaseがある場合、`install`は警告して継続し、`uninstall`は拒否する。`uninstall --force`は生存中leaseと常駐sessionの拒否を警告へ降格するだけで、`--yes`とは独立に最終確認を求める。
+
+### Rejected alternatives
+
+- 長時間`lock`でruntimeを排他する案: 複数runtimeの共存を妨げ、staleな`lock`の手動除去が必要になる。
+- `uninstall --force`で確認も省略する案: 実行中runtimeが使うfileを削除する危険な操作から利用者を守れない。
+
+**Related**: [US-107](user-stories.ja.md#us-107)、[ADR-005](#adr-005)、[ADR-007](#adr-007)、[ADR-010](#adr-010)

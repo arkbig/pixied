@@ -12,11 +12,15 @@ PIXIED_OPTIONS_LOADED=1
 
 declare -gA PIXIED_OPTION_CLI_SET=()
 declare -gA PIXIED_OPTION_ENV_SET=()
+declare -g PIXIED_REQUESTED_HOME_MODE=""
+declare -g PIXIED_REQUESTED_LOCAL_HOME=""
 
 # @description Record whether an option was supplied by the environment.
 # @exitcode 0 Always.
 pixied_options_capture_environment() {
     local option variable
+    PIXIED_REQUESTED_HOME_MODE=""
+    PIXIED_REQUESTED_LOCAL_HOME=""
     for option in home_mode local_home session_manager machine_id pixi_home; do
         variable=PIXIED_${option^^}
         if [ -n "${!variable:-}" ]; then
@@ -25,6 +29,12 @@ pixied_options_capture_environment() {
             PIXIED_OPTION_ENV_SET["$option"]=0
         fi
     done
+    if [ "${PIXIED_OPTION_ENV_SET[home_mode]:-0}" -eq 1 ]; then
+        PIXIED_REQUESTED_HOME_MODE=${PIXIED_HOME_MODE:-}
+    fi
+    if [ "${PIXIED_OPTION_ENV_SET[local_home]:-0}" -eq 1 ]; then
+        PIXIED_REQUESTED_LOCAL_HOME=${PIXIED_LOCAL_HOME:-}
+    fi
 }
 
 # @description Validate and normalize option values supplied through the environment.
@@ -93,19 +103,29 @@ pixied_options_parse() {
             *) pixied_die "invalid home mode: $value" "$PIXIED_EXIT_USAGE" ;;
             esac
             PIXIED_OPTION_CLI_SET[home_mode]=1
+            PIXIED_REQUESTED_HOME_MODE=$value
             shift
             ;;
         --home-mode=*)
-            pixied_options_parse --home-mode "${option#*=}"
+            value=${option#*=}
+            case "$value" in
+            local | nfs) export PIXIED_HOME_MODE=$value ;;
+            *) pixied_die "invalid home mode: $value" "$PIXIED_EXIT_USAGE" ;;
+            esac
+            PIXIED_OPTION_CLI_SET[home_mode]=1
+            PIXIED_REQUESTED_HOME_MODE=$value
             ;;
         --local-home)
             [ "$#" -ge 2 ] || pixied_die "missing value for --local-home" "$PIXIED_EXIT_USAGE"
             export PIXIED_LOCAL_HOME=$2
             PIXIED_OPTION_CLI_SET[local_home]=1
+            PIXIED_REQUESTED_LOCAL_HOME=$2
             shift
             ;;
         --local-home=*)
-            pixied_options_parse --local-home "${option#*=}"
+            export PIXIED_LOCAL_HOME=${option#*=}
+            PIXIED_OPTION_CLI_SET[local_home]=1
+            PIXIED_REQUESTED_LOCAL_HOME=${option#*=}
             ;;
         --session-manager)
             [ "$#" -ge 2 ] || pixied_die "missing value for --session-manager" "$PIXIED_EXIT_USAGE"
@@ -118,7 +138,12 @@ pixied_options_parse() {
             shift
             ;;
         --session-manager=*)
-            pixied_options_parse --session-manager "${option#*=}"
+            value=${option#*=}
+            case "$value" in
+            none | zellij) export PIXIED_SESSION_MANAGER=$value ;;
+            *) pixied_die "invalid session manager: $value" "$PIXIED_EXIT_USAGE" ;;
+            esac
+            PIXIED_OPTION_CLI_SET[session_manager]=1
             ;;
         --machine-id)
             [ "$#" -ge 2 ] || pixied_die "missing value for --machine-id" "$PIXIED_EXIT_USAGE"
@@ -129,7 +154,11 @@ pixied_options_parse() {
             shift
             ;;
         --machine-id=*)
-            pixied_options_parse --machine-id "${option#*=}"
+            value=${option#*=}
+            pixied_machine_id_is_safe "$value" ||
+                pixied_die "unsafe machine id: $value" "$PIXIED_EXIT_USAGE"
+            export PIXIED_MACHINE_ID=$value
+            PIXIED_OPTION_CLI_SET[machine_id]=1
             ;;
         --pixi-home)
             [ "$#" -ge 2 ] || pixied_die "missing value for --pixi-home" "$PIXIED_EXIT_USAGE"
@@ -139,7 +168,10 @@ pixied_options_parse() {
             shift
             ;;
         --pixi-home=*)
-            pixied_options_parse --pixi-home "${option#*=}"
+            value=${option#*=}
+            pixied_require_absolute_path "$value"
+            export PIXIED_PIXI_HOME=$value
+            PIXIED_OPTION_CLI_SET[pixi_home]=1
             ;;
         --*) pixied_die "unknown install option: $option" "$PIXIED_EXIT_USAGE" ;;
         *) pixied_die "unexpected install argument: $option" "$PIXIED_EXIT_USAGE" ;;
@@ -194,7 +226,14 @@ pixied_options_parse_runtime() {
             shift
             ;;
         --auto-attach=*)
-            pixied_options_parse_runtime --auto-attach "${option#*=}"
+            value=${option#*=}
+            case "$value" in
+            auto | none)
+                export PIXIED_AUTO_ATTACH=$value
+                PIXIED_OPTION_CLI_SET[auto_attach]=1
+                ;;
+            *) pixied_die "invalid auto-attach setting: $value" "$PIXIED_EXIT_USAGE" ;;
+            esac
             ;;
         --)
             shift
@@ -231,7 +270,9 @@ pixied_options_prompt() {
 
 # @description Ask for and validate the installation settings in an interactive wizard.
 # The current resolved values are used as defaults. Explicit command-line and
-# environment values can still be reviewed and changed by the user.
+# environment values can still be reviewed and changed by the user. On a
+# reinstall the home mode and local home are preserved and never prompted, so
+# the wizard cannot change them; other settings keep the existing behavior.
 #
 # @arg $1 integer Whether a state file already exists.
 # @exitcode 0 When the wizard is skipped or completed.
@@ -249,43 +290,47 @@ pixied_options_wizard() {
     previous_machine_id=$PIXIED_MACHINE_ID
     pixied_step "Installation configuration wizard"
 
-    home_mode=$PIXIED_HOME_MODE
-    while :; do
-        pixied_options_prompt "Home mode [local/nfs] (current: $home_mode): "
-        answer=${PIXIED_OPTIONS_ANSWER:-$home_mode}
-        case "$answer" in
-        local | nfs)
-            home_mode=$answer
-            export PIXIED_HOME_MODE=$home_mode
-            PIXIED_OPTION_CLI_SET[home_mode]=1
-            if ! pixied_options_is_explicit pixi_home; then
-                unset PIXIED_PIXI_HOME
-            fi
-            break
-            ;;
-        *) pixied_warn "choose local or nfs" ;;
-        esac
-    done
-
-    if [ "$home_mode" = nfs ]; then
-        local_home_default=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
-        if [ "$local_home_default" = "$PIXIED_ACCOUNT_HOME" ]; then
-            local_home_default=/local/${USER:-$(id -un)}
-        fi
-        local_home=$local_home_default
+    if [ "$state_exists" -eq 0 ]; then
+        home_mode=$PIXIED_HOME_MODE
         while :; do
-            pixied_options_prompt "Local home (current: $local_home): "
-            answer=${PIXIED_OPTIONS_ANSWER:-$local_home}
+            pixied_options_prompt "Home mode [local/nfs] (current: $home_mode): "
+            answer=${PIXIED_OPTIONS_ANSWER:-$home_mode}
             case "$answer" in
-            /*)
-                local_home=$answer
-                export PIXIED_LOCAL_HOME=$local_home
-                PIXIED_OPTION_CLI_SET[local_home]=1
+            local | nfs)
+                home_mode=$answer
+                export PIXIED_HOME_MODE=$home_mode
+                PIXIED_OPTION_CLI_SET[home_mode]=1
+                PIXIED_REQUESTED_HOME_MODE=$home_mode
+                if ! pixied_options_is_explicit pixi_home; then
+                    unset PIXIED_PIXI_HOME
+                fi
                 break
                 ;;
-            *) pixied_warn "local home must be an absolute path" ;;
+            *) pixied_warn "choose local or nfs" ;;
             esac
         done
+
+        if [ "$home_mode" = nfs ]; then
+            local_home_default=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
+            if [ "$local_home_default" = "$PIXIED_ACCOUNT_HOME" ]; then
+                local_home_default=/local/${USER:-$(id -un)}
+            fi
+            local_home=$local_home_default
+            while :; do
+                pixied_options_prompt "Local home (current: $local_home): "
+                answer=${PIXIED_OPTIONS_ANSWER:-$local_home}
+                case "$answer" in
+                /*)
+                    local_home=$answer
+                    export PIXIED_LOCAL_HOME=$local_home
+                    PIXIED_OPTION_CLI_SET[local_home]=1
+                    PIXIED_REQUESTED_LOCAL_HOME=$local_home
+                    break
+                    ;;
+                *) pixied_warn "local home must be an absolute path" ;;
+                esac
+            done
+        fi
     fi
 
     session_manager=$PIXIED_SESSION_MANAGER
@@ -364,46 +409,36 @@ pixied_options_is_explicit() {
         [ "${PIXIED_OPTION_ENV_SET[$1]:-0}" -eq 1 ]
 }
 
-# @description Reject reinstall attempts that change the session manager.
-# The existing installation must be uninstalled before changing this setting.
+# @description Reject reinstall attempts that change the home mode, local home, or session manager.
+# The existing installation must be uninstalled before changing these settings.
+# The requested values are compared against the saved state, not the resolved
+# paths, because path resolution overwrites the local home with the account
+# home in local mode and would otherwise hide an explicit --local-home change.
 #
-# @exitcode 0 When the requested session manager is compatible with state.
-# @exitcode 1 When the session manager change is not allowed.
+# @exitcode 0 When the requested settings are compatible with state.
+# @exitcode 1 When a setting change is not allowed.
 pixied_options_validate_state_transition() {
+    local requested_home_mode requested_local_home state_local_home
     [ "${PIXIED_STATE[state_version]+present}" = present ] || return 0
     if pixied_options_is_explicit session_manager &&
         [ "${PIXIED_STATE[session_manager]}" != "$PIXIED_SESSION_MANAGER" ]; then
         pixied_die "cannot change session manager during reinstall; run uninstall first"
     fi
-}
-
-# @description Reject an old NFS state that still stores runtime payloads on the account home.
-# The current NFS layout keeps data and config under the machine-local home. An
-# explicit XDG data or config home remains supported as a deliberate shared
-# override, but an unqualified legacy state must be uninstalled before reinstall.
-#
-# @exitcode 0 When the state uses the current layout or an explicit override.
-# @exitcode 1 When the legacy layout requires uninstall and reinstall.
-pixied_options_reject_legacy_nfs_state() {
-    [ "${PIXIED_STATE[home_mode]:-}" = nfs ] || return 0
-    local local_home path key legacy_paths=""
-    local_home=$(pixied_canonical_path "${PIXIED_STATE[local_home]}")
-    for key in data_dir config_dir; do
-        path=$(pixied_canonical_path "${PIXIED_STATE[$key]}")
-        case "$path/" in
-        "$local_home/"*) continue ;;
-        esac
-        case "$key" in
-        data_dir) [ -n "${XDG_DATA_HOME:-}" ] && continue ;;
-        config_dir) [ -n "${XDG_CONFIG_HOME:-}" ] && continue ;;
-        esac
-        if [ -n "$legacy_paths" ]; then
-            legacy_paths+="; "
+    if pixied_options_is_explicit home_mode; then
+        requested_home_mode=${PIXIED_REQUESTED_HOME_MODE:-$PIXIED_HOME_MODE}
+        if [ "${PIXIED_STATE[home_mode]}" != "$requested_home_mode" ]; then
+            pixied_die "cannot change home mode during reinstall; run uninstall first"
         fi
-        legacy_paths+="$key=$path"
-    done
-    [ -z "$legacy_paths" ] ||
-        pixied_die "existing NFS state uses legacy shared runtime paths ($legacy_paths); run 'pixied uninstall --yes' on this machine, then reinstall with --home-mode nfs --local-home PATH"
+    fi
+    if pixied_options_is_explicit local_home; then
+        requested_local_home=${PIXIED_REQUESTED_LOCAL_HOME:-$PIXIED_LOCAL_HOME}
+        pixied_require_absolute_path "$requested_local_home"
+        requested_local_home=$(pixied_canonical_path "$requested_local_home")
+        state_local_home=$(pixied_canonical_path "${PIXIED_STATE[local_home]}")
+        if [ "$requested_local_home" != "$state_local_home" ]; then
+            pixied_die "cannot change local home during reinstall; run uninstall first"
+        fi
+    fi
 }
 
 # @description Reject active-runtime install options that change the verified identity.

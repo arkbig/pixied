@@ -1,6 +1,6 @@
 # PixiEden開発ドキュメント
 
-要件と設計の文書は、責任範囲を分けた次の4階層で管理する。
+開発者向けの入口である。要件と設計の文書は、責任範囲を分けた次の4階層で管理する。
 
 ```text
 PRD（目的・背景）
@@ -35,6 +35,37 @@ USは必ず関連UCのIDを持ち、設計判断が関係する場合は関連AD
 
 state形式、runtime hook、unit、関数単位の入出力、詳細な失敗分岐は、対応する`bin/`、`lib/`の実装と`tests/`を正とする。PRD、UC、US/AC、ADRには、実装詳細を重複して記載しない。
 
+## 開発の進め方
+
+`bin/pixied`と`lib/*.sh`を変更した場合は、次で構文と静的解析を確認する。
+
+```bash
+bash -n bin/pixied lib/*.sh install-local.sh install.sh
+shellcheck -x bin/pixied lib/*.sh install-local.sh install.sh
+```
+
+Bats統合テストは次で実行する。`generate`はDockerが必要なため分離している。
+
+```bash
+tests/run.sh
+tests/run.sh generate
+tests/run.sh all
+```
+
+契約テストとして`CLI contract is stable`で`help`、`install --help`、`uninstall --help`、`generate --help`の要点を固定している。HELP文言を変更した場合はこのテストも更新する。
+
+## HELPと警告文の分担
+
+利用者向けの操作説明は文書ではなくHELPと警告文を正とする。
+
+- 全体像は`pixied help`、各コマンドのoptionは`pixied <command> --help`で確認する。
+- `install`と`install-local.sh`と`install.sh`は同じinstall optionを受け付ける。
+- `uninstall --help`で`--yes`と`--force`の分担を確認する。`--force`は実行中runtimeと常駐sessionの拒否を警告へ降格するだけで、最終確認は`--yes`とは独立である。
+- `generate --help`で形式ごとの`--force`と`--print-envrc`の扱いを確認する。
+- 実行時の判断材料(設定確認、非local警告、同期警告、lease警告、所有検証エラー)は標準エラー出力の警告文とエラー文で案内する。
+
+トップレベルの`README.ja.md`は初見の使用者向けに最小限とし、解決順序や所有境界などの詳細はここに記載する。
+
 ## 初期版のNFS境界
 
 `nfs`modeの`PIXIED_LOCAL_HOME`は、PixiEdenのinstall前に環境側で作成済みでなければならない。installはdirectoryの存在、owner、書込み権限、account homeとの分離、local filesystem条件を検証するが、directoryや親directoryを作成しない。既定候補の`/local/$USER`も同様に事前準備が必要である。
@@ -48,6 +79,7 @@ local homeの作成状態はNFS同期の有無とは別である。`nfs`modeで�
 |分類|環境変数|用途|
 |---|---|---|
 |install設定|`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`|CLI optionと同じinstall設定を環境変数から指定する。|
+|runtime設定|`PIXIED_AUTO_ATTACH`|`shell`/`hook`の`--auto-attach`と同じ自動attach設定を環境変数から指定する。`auto`または`none`だけを受け付ける。|
 |advanced設定|`PIXIED_MACHINE_ID`|machine stateの識別子を明示する。安全なpath segmentでなければ停止する。|
 |Pixi version設定|`PIXIED_PIXI_VERSION`、`PIXIED_PIXI_SHA256`|Pixi versionの選択とasset checksumの明示を行う。|
 |release設定|`PIXIED_RELEASE_URL`|remote installerが取得するrelease archiveのURLを変更する。|
@@ -65,98 +97,37 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`bin/pixied`|CLI dispatch、libraryの読み込み、install/start/uninstallの実行順序。|
 |`lib/paths.sh`|account home、local home、XDG path、machine-id、専用`PIXI_HOME`の解決と検証。|
 |`lib/options.sh`|CLI、公開環境変数、state、自動検出、既定値の優先順位と確認。|
-|`lib/state.sh`|許可keyだけを扱うstate parser、path・値・hashの検証、lock、atomic write。|
+|`lib/state.sh`|許可keyだけを扱うstate parser、path・値・hashの検証、短時間lock、atomic write。|
+|`lib/lease.sh`|実行中runtimeのlease取得・解放、staleなleaseの自動除去、他runtime生存の判定。|
 |`lib/pixi.sh`|専用Pixi binaryの取得・checksum検証、専用`PIXI_HOME`でのPixi実行、Global executableの検証。|
 |`lib/hook.sh`|Bash/zshからsourceできるruntime hookと、hookをsourceするshell codeの生成。|
-|`lib/sync.sh`|NFS modeの8ファイルallowlist、account homeを正とする一方向同期(clean exit後のpushを含む)。|
+|`lib/sync.sh`|NFS modeの8ファイルallowlist、`account→local`の一方向`reconcile`。|
 |`lib/session.sh`|child command、Zellij session、runtime内のdirect attach。|
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
 |`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
 
-installはaccount home、home mode、local home、XDG pathを副作用の前に解決する。`nfs`modeではPixi data、config、cache、lockをlocal home側へ置き、`local`modeでは専用data directory配下へ置く。state registryとaccount側launcherだけは共有し、launcherはcurrent machineのstateからlocal payloadへdispatchする。すべてのPixi呼び出しは専用binaryを絶対pathで実行し、runtime内で専用`PIXI_HOME`、`PIXI_CACHE_DIR`、`PIXI_NO_PATH_UPDATE=1`を設定する。利用者の通常のPixi、通常の`PIXI_HOME`、通常のPATHはこの境界の外にある。
+installはaccount home、home mode、local home、XDG pathを副作用の前に解決する。`nfs`modeではPixi data、config、cache、lockをlocal home側へ置き、`local`modeでは専用data directory配下へ置く。state registryとaccount側launcherだけは共有し、launcherはcurrent machineのstateからlocal payloadへdispatchする。すべてのPixi呼び出しは専用binaryを絶対pathで実行し、runtime内で専用`PIXI_HOME`、`PIXI_CACHE_DIR`、`PIXI_NO_PATH_UPDATE=1`を設定する。
 
-machine stateは共有registry内の`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存し、lockはNFSではmachine state directory内、local modeではstate root内に保存する。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。既存資源をstateなしまたはhash不一致のまま引き継がず、未管理の既存Pixi pathへのGlobal provisionも行わない。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。旧NFS layoutのstateはshared payloadを継続利用せず、uninstall後の再installを要求する。
+machine stateは共有registry内の`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存し、短時間lockは`nfs`ではmachine state directory内、`local`ではstate root内に保存する。実行中runtimeの生存は`leases/`配下のlease fileで表す。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。
 
-runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。hookの評価でnetwork、Pixi Global変更、NFS同期全体を実行しない。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、NFS modeのpullと、status `0`で終わった場合だけpushを行う。signal、失敗、lock取得失敗時はpushしない。
+runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、runtime開始時に`account→local`の一方向`reconcile`だけを行う。
 
 ## テストとrelease検証
 
-`tests/run.sh`のBats統合テストはfake Pixi、Zellij、downloadを使い、hostの既存環境を変更せずに通常経路と失敗経路を検証する。4つのhome/session mode、再install、hook、shell/run、uninstall、生成物、checksum、所有境界はこのsuiteのcommand logと一時pathで確認する。
+`tests/run.sh`のBats統合テストはfake Pixi、Zellij、downloadを使い、hostの既存環境を変更せずに通常経路と失敗経路を検証する。
 
-実環境の責務は`tests/e2e/run-multipass.sh`へ集約する。runnerは`package-release.sh`が作成したarchiveを使って使い捨てUbuntu VMへinstallし、実Pixi、実direnv、実Zellij、PTY、同一machine上のsession再接続を検証する。runnerが作成したVMだけを削除し、既存VMやhostのpathは変更しない。
+実環境の検証は`tests/e2e/run-multipass.sh`へ集約する。使い捨てUbuntu VMへrelease archiveをinstallし、実Pixi、実direnv、実Zellij、PTY、同一machine上のsession再接続を検証する。
 
-release archiveの入力は`install-local.sh`、`bin/`、`lib/`、両言語のREADME、`docs/`だけであり、`scripts/package-release.sh`がarchive root `pixied/`へまとめる。remote入口の`install.sh`はrelease archiveを取得してarchive内の`install-local.sh`へ委譲する。Pixi assetの固定checksum、公式Release checksum、`PIXIED_PIXI_SHA256` overrideのauthorityは`lib/pixi.sh`である。
+## Release archiveの作成と公開
 
-## Release
-
-配布物の入力は`install-local.sh`、`bin/`、`lib/`、README、`docs/`であり、[scripts/package-release.sh](../scripts/package-release.sh)が`pixied.tar.gz`へまとめる。remote入口の[install.sh](../install.sh)はRelease archiveを取得し、archive内の`install-local.sh`へ処理を委譲する。
-
-Release E2Eはcheckout全体を直接installせず、package scriptが作成したarchiveを使って検証する。Pixi本体のasset checksumは`lib/pixi.sh`の固定digestまたは公式Release checksumを使い、各経路の確認は`tests/`を参照する。
-
-## Release archiveの作成
-
-開発checkoutから配布用archiveを作成する場合は、次を実行する。archiveには配備に必要な`install-local.sh`、`bin/`、`lib/`、README、`docs/`だけが含まれる。
-
-```bash
-scripts/package-release.sh
-```
-
-出力先を指定する場合は、archive pathを引数に渡す。
-
-```bash
-scripts/package-release.sh /tmp/pixied.tar.gz
-```
-
-## GitHub ActionsによるRelease公開
-
-オンラインインストールの入口である[install.sh](../install.sh)は、GitHub Releasesの`latest`にある`pixied.tar.gz`を取得する。Release assetは、バージョンタグをpushしたときに[release workflow](../.github/workflows/release.yml)が自動生成・公開する。
-
-Releaseを作成する前に、作業ツリーの変更をcommitし、対象commitをReleaseに含める。次のコマンドで通常の統合テストとarchive作成を確認する。生成DockerテストはDockerが必要なため、必要なときだけ`generate`、または全suiteを確認するときに`all`を指定する。
+配布物の入力は`install-local.sh`、`bin/`、`lib/`、README、`docs/`であり、`scripts/package-release.sh`が`pixied.tar.gz`へまとめる。remote入口の`install.sh`はRelease archiveを取得し、archive内の`install-local.sh`へ処理を委譲する。
 
 ```bash
 tests/run.sh
-tests/run.sh generate
-tests/run.sh all
 scripts/package-release.sh
 tar -tzf dist/pixied.tar.gz
-```
-
-検証が成功したら、`scripts/tag-release.sh`でタグを作成する。タグ名は`bin/pixied`の`PIXIED_VERSION`から自動的に`v<version>`として導出されるため、手動でタグ名を指定しない。
-
-```bash
 scripts/tag-release.sh
 git push origin v0.1.0
 ```
 
-タグを同時にpushする場合は、`--push`オプションでタグ作成後に自動pushできる。
-
-```bash
-scripts/tag-release.sh --push
-```
-
-タグを作成せずに検証だけ行う場合は、`--dry-run`を使う。
-
-```bash
-scripts/tag-release.sh --dry-run
-```
-
-`scripts/tag-release.sh`は次の場合に失敗し、タグを作成しない。
-
-- tracked fileに未commitの変更がある場合。commitしてから再実行する。
-- 導出したタグがlocalまたはoriginに既に存在する場合。`bin/pixied`の`PIXIED_VERSION`を更新してから再実行する。
-
-バージョン更新を忘れて同じバージョンで再タグしようとしても、既存タグが検出されて失敗するため、既存Releaseを上書きしない。
-
-`v*`タグへのpushを受けると、workflowは次の処理を行う。
-
-- `scripts/package-release.sh`で`dist/pixied.tar.gz`を作成する。
-- タグと同名のGitHub Releaseがなければ、generated notes付きで作成する。
-- `pixied.tar.gz`をRelease assetとしてuploadする。既存assetは更新する。
-
-GitHub Actionsの完了後、GitHub Releaseに`pixied.tar.gz`が存在することを確認する。公開URLは次の形式であり、`install.sh`がこのURLの`latest`を取得する。
-
-```text
-https://github.com/arkbig/pixied/releases/latest/download/pixied.tar.gz
-```
-
-workflowが失敗する場合は、Actionsの実行ログで`package-release.sh`の失敗、Releaseへの書込み権限、タグ名が`v`で始まっているかを確認する。workflowは`contents: write`権限を要求するため、リポジトリまたはOrganizationのActions設定でworkflowの書込みが禁止されている場合は設定を見直す。
+タグ名は`bin/pixied`の`PIXIED_VERSION`から`v<version>`として導出する。`v*`タグへのpushで[release workflow](../.github/workflows/release.yml)がarchiveを作成し、GitHub Releaseへ`pixied.tar.gz`を公開する。

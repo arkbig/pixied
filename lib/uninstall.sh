@@ -27,6 +27,23 @@ PIXIED_UNINSTALL_SHARED_COMMAND=0
 PIXIED_UNINSTALL_SHARED_PIXI_HOME=0
 PIXIED_UNINSTALL_QUARANTINE_COUNTER=0
 
+# @description Print the uninstall subcommand usage to standard output.
+# @stdout The uninstall command help message.
+# @exitcode 0 Always.
+pixied_uninstall_usage() {
+    cat <<'USAGE'
+Usage: pixied uninstall [--yes] [--force]
+
+Remove the PixiEden installation.
+
+Options:
+    --yes     Skip the final confirmation prompt.
+    --force   Downgrade active-runtime lease and resident Zellij session
+              checks to warnings. The final confirmation is still required
+              unless --yes is also given.
+USAGE
+}
+
 # @description Parse the arguments accepted by uninstall.
 # Only confirmation control and the force flag are accepted; installation
 # options cannot redirect an uninstall to a different resource set.
@@ -44,6 +61,7 @@ pixied_uninstall_parse() {
     while [ "$#" -gt 0 ]; do
         option=$1
         case "$option" in
+        --help | -h | -help) pixied_die "$(pixied_uninstall_usage)" "$PIXIED_EXIT_USAGE" ;;
         --yes) PIXIED_INSTALL_ASSUME_YES=1 ;;
         --force) PIXIED_UNINSTALL_FORCE=1 ;;
         --*) pixied_die "unknown uninstall option: $option" "$PIXIED_EXIT_USAGE" ;;
@@ -263,8 +281,6 @@ pixied_uninstall_validate_current_state() {
         pixied_uninstall_require_path_match launcher_path \
             "${PIXIED_STATE[launcher_path]}" "$expected"
     fi
-    expected="${PIXIED_STATE[state_dir]}/machines/${PIXIED_STATE[machine_id]}/sync-baseline"
-    pixied_uninstall_require_path_match sync_baseline "${PIXIED_STATE[sync_baseline]}" "$expected"
 
     if pixied_state_has direnv_path; then
         expected="${PIXIED_STATE[pixi_home]}/bin/direnv"
@@ -314,13 +330,9 @@ pixied_uninstall_validate_current_state() {
         checks+=("${PIXIED_STATE[runtime_hook_path]}|file|${PIXIED_STATE[runtime_hook_hash]}")
     fi
     if pixied_state_has launcher_path && pixied_state_has launcher_hash; then
-        checks+=(
-            "${PIXIED_STATE[launcher_path]}|file|$(pixied_launcher_uninstall_hash \
-                "${PIXIED_STATE[launcher_path]}" "${PIXIED_STATE[launcher_hash]}" \
-                "${PIXIED_STATE[home_mode]}" "${PIXIED_STATE[state_dir]}")"
-        )
+        checks+=("${PIXIED_STATE[launcher_path]}|file|${PIXIED_STATE[launcher_hash]}")
     fi
-    checks+=("${PIXIED_STATE[sync_baseline]}|file" "${PIXIED_STATE_FILE}|file")
+    checks+=("${PIXIED_STATE_FILE}|file")
 
     for check in "${checks[@]}"; do
         IFS='|' read -r path kind hash <<<"$check"
@@ -510,7 +522,7 @@ pixied_uninstall_add_target() {
 # @exitcode 0 When the target list is safe to execute.
 # @exitcode 1 When state values cannot form a safe target list.
 pixied_uninstall_prepare_targets() {
-    local full_data=0 full_pixi=0 pixi_nested=0 launcher_hash
+    local full_data=0 full_pixi=0 pixi_nested=0
     PIXIED_UNINSTALL_TARGET_PATHS=()
     PIXIED_UNINSTALL_TARGET_HASHES=()
     PIXIED_UNINSTALL_TARGET_KINDS=()
@@ -560,14 +572,10 @@ pixied_uninstall_prepare_targets() {
         fi
         if [ "$PIXIED_UNINSTALL_SHARED_COMMAND" -eq 0 ] &&
             pixied_state_has launcher_path && pixied_state_has launcher_hash; then
-            launcher_hash=$(pixied_launcher_uninstall_hash \
-                "${PIXIED_STATE[launcher_path]}" "${PIXIED_STATE[launcher_hash]}" \
-                "${PIXIED_STATE[home_mode]}" "${PIXIED_STATE[state_dir]}")
             pixied_uninstall_add_target "${PIXIED_STATE[launcher_path]}" \
-                "$launcher_hash" file
+                "${PIXIED_STATE[launcher_hash]}" file
         fi
     fi
-    pixied_uninstall_add_target "${PIXIED_STATE[sync_baseline]}" "" file
     local lease_dir
     lease_dir=$(pixied_lease_dir)
     if [ -e "$lease_dir" ] || [ -L "$lease_dir" ]; then
@@ -879,26 +887,6 @@ pixied_launcher_nfs_dispatcher_matches() {
     [ "$actual" = "$expected" ]
 }
 
-# @description Return the launcher hash that uninstall should validate.
-# A migrated NFS dispatcher can temporarily have an older hash in a peer state
-# file, so its exact canonical content supplies the current expected hash.
-#
-# @arg $1 string The launcher path.
-# @arg $2 string The recorded launcher hash.
-# @arg $3 string The recorded home mode.
-# @arg $4 string The canonical shared state directory.
-# @stdout The expected launcher hash.
-# @exitcode 0 Always when the recorded hash is usable.
-pixied_launcher_uninstall_hash() {
-    local path=$1 recorded_hash=$2 home_mode=$3 state_dir=$4
-    if [ "$home_mode" = nfs ] &&
-        pixied_launcher_nfs_dispatcher_matches "$path" "$state_dir"; then
-        pixied_sha256_file "$path"
-    else
-        printf '%s' "$recorded_hash"
-    fi
-}
-
 # @description Adopt a shared launcher recorded by another machine state.
 # An existing launcher is reusable only when its exact path and hash are
 # recorded by a valid state file from the shared state directory.
@@ -943,10 +931,6 @@ pixied_launcher_adopt_shared() {
             if pixied_hash_matches "$target" "${PIXIED_STATE[launcher_hash]}"; then
                 pixied_validate_owned_path "$target" "${PIXIED_STATE[launcher_hash]}"
                 actual=${PIXIED_STATE[launcher_hash]}
-            elif [ "${saved_state[home_mode]:-}" = nfs ] &&
-                pixied_launcher_nfs_dispatcher_matches "$target" "$PIXIED_STATE_DIR"; then
-                pixied_validate_owned_path "$target"
-                actual=$(pixied_sha256_file "$target")
             else
                 continue
             fi

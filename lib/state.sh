@@ -40,7 +40,6 @@ readonly PIXIED_STATE_KEY_ORDER=(
     launcher_hash
     created_data
     created_pixi_home
-    sync_baseline
 )
 
 # @description Check whether the given key is a known state key.
@@ -55,31 +54,13 @@ pixied_state_known_key() {
     return 1
 }
 
-# @description Reject state keys from the removed host-service implementation.
-# @arg $1 string The state key to inspect.
-# @exitcode 0 When the key belongs to the obsolete state format.
-# @exitcode 1 When the key is not obsolete.
-pixied_state_obsolete_key() {
-    case "$1" in
-    systemd_user_dir | unit_path | unit_hash | systemd_available | linger_enabled | created_linger) return 0 ;;
-    *) return 1 ;;
-    esac
-}
-
-# @description Fail with an actionable message for an obsolete state file.
-# @arg $1 string The obsolete state key.
-# @exitcode 1 Always.
-pixied_state_reject_obsolete_key() {
-    pixied_die "obsolete state key: $1; reinstall PixiEden before continuing"
-}
-
 # @description Check whether the given key holds a path-format value.
 # @arg $1 string The key to check
 # @exitcode 0 When the key is a path-format key
 # @exitcode 1 Otherwise
 pixied_state_path_key() {
     case "$1" in
-    account_home | local_home | data_dir | config_dir | state_dir | command_bin | pixi_home | pixi_binary_path | direnv_path | zellij_path | runtime_hook_path | launcher_path | sync_baseline) return 0 ;;
+    account_home | local_home | data_dir | config_dir | state_dir | command_bin | pixi_home | pixi_binary_path | direnv_path | zellij_path | runtime_hook_path | launcher_path) return 0 ;;
     *) return 1 ;;
     esac
 }
@@ -173,7 +154,7 @@ pixied_state_get() {
 # @exitcode 1 When any key is missing
 pixied_state_require_core() {
     local key
-    for key in state_version machine_id account_home home_mode local_home session_manager pixi_home sync_baseline; do
+    for key in state_version machine_id account_home home_mode local_home session_manager pixi_home; do
         pixied_state_has "$key" || pixied_die "state key is missing: $key"
     done
 }
@@ -229,7 +210,6 @@ pixied_state_initialize_from_paths() {
     pixied_state_set pixi_home "$PIXIED_PIXI_HOME"
     pixied_state_set created_data 0
     pixied_state_set created_pixi_home 0
-    pixied_state_set sync_baseline "$PIXIED_MACHINE_STATE_DIR/sync-baseline"
 }
 
 # @description Print the SHA-256 hash of a file.
@@ -387,7 +367,6 @@ pixied_state_load() {
         key=${line%%=*}
         value=${line#*=}
         if ! pixied_state_known_key "$key"; then
-            pixied_state_obsolete_key "$key" && pixied_state_reject_obsolete_key "$key"
             pixied_die "unknown state key: $key"
         fi
         pixied_state_has "$key" && pixied_die "duplicate state key: $key"
@@ -420,7 +399,6 @@ pixied_state_load_external() {
         key=${line%%=*}
         value=${line#*=}
         if ! pixied_state_known_key "$key"; then
-            pixied_state_obsolete_key "$key" && pixied_state_reject_obsolete_key "$key"
             pixied_die "unknown state key: $key"
         fi
         pixied_state_has "$key" && pixied_die "duplicate state key: $key"

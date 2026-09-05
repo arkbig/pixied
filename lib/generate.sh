@@ -471,12 +471,14 @@ ENV PIXI_HOME=/opt/pixi
 ENV PATH=${PIXI_HOME}/projects/bin:${PIXI_HOME}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 WORKDIR /workspace
+# Wildcard COPY fails with no match, so .devcontainer/.env guarantees a source
+# and lands as ./.env for the RUN step to relocate.
 COPY pixi.tom[l] pixi.loc[k] .devcontainer/.env ./
-COPY .devcontainer/.env .devcontainer/.env
 COPY .devcontainer/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-RUN set -a && \
+RUN mkdir -p .devcontainer && mv ./.env .devcontainer/.env && \
+    set -a && \
     . /workspace/.devcontainer/.env && \
     set +a && \
     CONTAINER_UID=${CONTAINER_UID:-1000} && \
@@ -695,8 +697,21 @@ pixied_generate_write_file() {
 # @stdout The generate command usage.
 # @exitcode 0 Always.
 pixied_generate_usage() {
-    printf '%s\n' "usage: pixied generate <direnv|devcontainer|dockerfile> [--print-envrc]"
-    pixied_generate_force_usage
+    cat <<'USAGE'
+Usage: pixied generate <direnv|devcontainer|dockerfile> [OPTIONS]
+
+Generate a project integration file.
+
+Formats:
+    direnv        Append the activation block to .envrc.
+    devcontainer  Generate .devcontainer files.
+    dockerfile    Generate a Dockerfile.
+
+Options:
+    --print-envrc   (direnv only) Print activation code instead of writing .envrc.
+    --force         (devcontainer, dockerfile only) Back up existing files
+                    as <name>.bak before replacing them.
+USAGE
 }
 
 # @description Print the usage for force-enabled project integration generation.
@@ -723,15 +738,25 @@ pixied_generate() {
     local force=0 print_envrc=0 arg
     local usage
     usage=$(pixied_generate_usage)
-    [ "$#" -ge 1 ] || pixied_die "$usage" "$PIXIED_EXIT_USAGE"
+    if [ "$#" -eq 0 ]; then
+        pixied_die "$usage" "$PIXIED_EXIT_USAGE"
+    fi
     case "$format" in
+    --help | -h | -help)
+        [ "$#" -eq 1 ] || pixied_die "$usage" "$PIXIED_EXIT_USAGE"
+        printf '%s\n' "$usage"
+        return "$PIXIED_EXIT_OK"
+        ;;
     direnv | devcontainer | dockerfile) ;;
     *) pixied_die "$usage" "$PIXIED_EXIT_USAGE" ;;
     esac
     shift
     for arg in "$@"; do
         case "$arg" in
-        --force) force=1 ;;
+        --help | -h | -help) pixied_die "$usage" "$PIXIED_EXIT_USAGE" ;;
+        --force)
+            [ "$format" = direnv ] || force=1
+            ;;
         --print-envrc)
             [ "$format" = direnv ] || pixied_die "$usage" "$PIXIED_EXIT_USAGE"
             print_envrc=1

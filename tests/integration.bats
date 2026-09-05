@@ -176,6 +176,22 @@ assert_semver() {
     run bash "$cli" run
     assert_failure 2
     assert_output --partial 'usage: pixied run <command> [args...]'
+
+    run bash "$cli" install --help
+    assert_success
+    assert_output --partial 'Usage: pixied install [OPTIONS]'
+
+    run bash "$cli" uninstall --help
+    assert_success
+    assert_output --partial 'Usage: pixied uninstall [--yes] [--force]'
+
+    run bash "$cli" generate --help
+    assert_success
+    assert_output --partial 'Usage: pixied generate <direnv|devcontainer|dockerfile> [OPTIONS]'
+
+    run bash "$cli" generate
+    assert_failure 2
+    assert_output --partial 'Usage: pixied generate <direnv|devcontainer|dockerfile> [OPTIONS]'
 }
 
 @test "project integration generation is isolated and protects existing files" {
@@ -231,12 +247,15 @@ assert_semver() {
         pixied_test_fail "devcontainer.json was not generated"
     [ -f "$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile" ] ||
         pixied_test_fail "DevContainer Dockerfile was not generated"
-    local dc_df copy_line run_line
+    local dc_df move_line run_line
     dc_df="$PIXIED_TEST_ROOT/project/.devcontainer/Dockerfile"
     grep -Fq -- 'COPY pixi.tom[l] pixi.loc[k] .devcontainer/.env ./' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not copy the project files or fallback .env"
-    grep -Fq -- 'COPY .devcontainer/.env .devcontainer/.env' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not copy the devcontainer .env"
+    if grep -Fq -- 'COPY .devcontainer/.env .devcontainer/.env' "$dc_df"; then
+        pixied_test_fail "DevContainer Dockerfile still duplicates the devcontainer .env copy"
+    fi
+    grep -Fq -- 'mkdir -p .devcontainer && mv ./.env .devcontainer/.env' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not relocate the copied .env"
     grep -Fq -- "ARG PIXI_VERSION=$expected_pixi_version" "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not use the pinned Pixi version"
     grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-plucky' "$dc_df" ||
@@ -253,10 +272,10 @@ assert_semver() {
         pixied_test_fail "DevContainer Dockerfile does not create an empty project bin directory"
     grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not expose the project environment through the configured Pixi home"
-    copy_line=$(grep -n -- 'COPY .devcontainer/.env .devcontainer/.env' "$dc_df" | head -n1 | cut -d: -f1)
+    move_line=$(grep -n -- 'mkdir -p .devcontainer && mv ./.env .devcontainer/.env' "$dc_df" | head -n1 | cut -d: -f1)
     run_line=$(grep -n -- '. /workspace/.devcontainer/.env' "$dc_df" | head -n1 | cut -d: -f1)
-    [ -n "$copy_line" ] && [ -n "$run_line" ] && [ "$copy_line" -lt "$run_line" ] ||
-        pixied_test_fail "DevContainer Dockerfile sources the devcontainer .env before copying it"
+    [ -n "$move_line" ] && [ -n "$run_line" ] && [ "$move_line" -lt "$run_line" ] ||
+        pixied_test_fail "DevContainer Dockerfile relocates the devcontainer .env before sourcing it"
     grep -Fq -- '. /workspace/.devcontainer/.env' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not source the devcontainer .env"
     if grep -Fq -- '. /workspace/.env' "$dc_df"; then
@@ -536,7 +555,7 @@ PYPROJECT
     run env HOME="$home" bash -c \
         'cd -- "$1" && bash "$2" generate dockerfile --bogus' bash "$project" "$cli"
     assert_failure 2
-    assert_output --partial 'usage: pixied generate'
+    assert_output --partial 'Usage: pixied generate <direnv|devcontainer|dockerfile> [OPTIONS]'
 }
 
 @test "generated project shell hook keeps Pixi variables isolated" {
@@ -1031,14 +1050,13 @@ CURL
         pixied_test_fail "zellij hash was not persisted"
 }
 
-@test "zellij mode avoids host service commands and persists no obsolete state" {
+@test "zellij mode avoids host service commands" {
     local home="$PIXIED_TEST_ROOT/phase5-direct-home"
     local data="$PIXIED_TEST_ROOT/phase5-direct-data"
     local config="$PIXIED_TEST_ROOT/phase5-direct-config"
     local state="$PIXIED_TEST_ROOT/phase5-direct-state"
     local fake_bin="$PIXIED_TEST_ROOT/phase5-direct-bin"
     local log="$PIXIED_TEST_ROOT/phase5-direct.log"
-    local state_file="$state/pixied/machines/phase5-direct/state"
     mkdir -p "$home"
     setup_fake_commands "$fake_bin"
     : >"$log"
@@ -1051,11 +1069,6 @@ CURL
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
     [ ! -e "$config/systemd" ] || pixied_test_fail "host service files were created"
-    for obsolete_key in systemd_user_dir unit_path unit_hash systemd_available linger_enabled created_linger; do
-        if grep -Fq -- "$obsolete_key=" "$state_file"; then
-            pixied_test_fail "obsolete state key was persisted: $obsolete_key"
-        fi
-    done
     if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
         pixied_test_fail "host service commands were unexpectedly called"
     fi
@@ -1135,6 +1148,18 @@ CURL
     assert_success
     if grep -Fq -- "zellij attach --create" "$log"; then
         pixied_test_fail "shell --auto-attach none unexpectedly attached to Zellij"
+    fi
+
+    : >"$log"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
+        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
+        bash -c '
+        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell --auto-attach=none" /dev/null
+    ' "$data"
+    assert_success
+    if grep -Fq -- "zellij attach --create" "$log"; then
+        pixied_test_fail "shell --auto-attach=none unexpectedly attached to Zellij"
     fi
 
     : >"$log"
@@ -1389,6 +1414,8 @@ CURL
     local log="$PIXIED_TEST_ROOT/phase3-mode-none.log"
     local machine_id=phase3-mode-none
     local runtime_hook="$config/pixied/runtime-hook.bash"
+    local state_file="$state/pixied/machines/$machine_id/state"
+    local hook_hash
     mkdir -p "$home"
     setup_fake_commands "$fake_bin"
     : >"$log"
@@ -1411,11 +1438,67 @@ CURL
         /dev/null
     assert_success
     assert_output --partial 'hook-finished'
+    [[ "${output:-}" != *ERROR* ]] ||
+        pixied_test_fail "hook reported an internal ERROR: ${output:-}"
     if grep -Fq -- 'zellij attach --create' "$log"; then
         pixied_test_fail "auto-attach=none hook unexpectedly started Zellij"
     fi
     grep -Fq -- 'export PIXIED_AUTO_ATTACH=none' "$runtime_hook" ||
         pixied_test_fail "hook did not bake PIXIED_AUTO_ATTACH=none into the runtime hook"
+    hook_hash=$(sha256sum "$runtime_hook" | cut -d' ' -f1)
+    [[ "$hook_hash" =~ ^[0-9a-f]{64}$ ]] ||
+        pixied_test_fail "runtime hook hash is not a sha256 hex string: $hook_hash"
+    grep -Fq -- "runtime_hook_hash=$hook_hash" "$state_file" ||
+        pixied_test_fail "state runtime_hook_hash does not match the hook file hash"
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
+        PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
+        bash "$data/pixied/bin/pixied" run true
+    assert_success "run after hook"
+    [[ "${output:-}" != *ERROR* ]] ||
+        pixied_test_fail "run after hook reported an internal ERROR: ${output:-}"
+    [[ "${output:-}" != *'managed path hash does not match'* ]] ||
+        pixied_test_fail "run after hook hit a stale hook hash: ${output:-}"
+}
+
+@test "hook --auto-attach space and equals forms keep the shell positional" {
+    local home="$PIXIED_TEST_ROOT/phase3-hook-forms-home"
+    local data="$PIXIED_TEST_ROOT/phase3-hook-forms-data"
+    local config="$PIXIED_TEST_ROOT/phase3-hook-forms-config"
+    local state="$PIXIED_TEST_ROOT/phase3-hook-forms-state"
+    local state_file="$state/pixied/machines/phase3-hook-forms/state"
+    local runtime_hook="$config/pixied/runtime-hook.bash"
+    local variant hook_hash
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-forms PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    for variant in 'bash --auto-attach none' 'bash --auto-attach=none' \
+        '--auto-attach none bash' '--auto-attach=none bash'; do
+        # shellcheck disable=SC2086 # Variant is intentionally word-split into hook arguments.
+        run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+            XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-forms \
+            bash "$data/pixied/bin/pixied" hook $variant
+        assert_success "hook $variant"
+        [[ "${output:-}" != *ERROR* ]] ||
+            pixied_test_fail "hook $variant reported an internal ERROR: ${output:-}"
+        assert_equal ". $runtime_hook" "$output"
+        grep -Fq -- 'export PIXIED_AUTO_ATTACH=none' "$runtime_hook" ||
+            pixied_test_fail "hook $variant did not bake PIXIED_AUTO_ATTACH=none"
+        hook_hash=$(sha256sum "$runtime_hook" | cut -d' ' -f1)
+        grep -Fq -- "runtime_hook_hash=$hook_hash" "$state_file" ||
+            pixied_test_fail "hook $variant left a stale runtime_hook_hash"
+        run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+            XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-forms \
+            bash "$data/pixied/bin/pixied" run true
+        assert_success "run after hook $variant"
+        [[ "${output:-}" != *ERROR* ]] ||
+            pixied_test_fail "run after hook $variant reported an ERROR: ${output:-}"
+    done
 }
 
 # US-103-3
@@ -1539,6 +1622,90 @@ CURL
         pixied_test_fail "session manager state was changed unexpectedly"
     [ ! -e "$data/pixied/pixi/bin/zellij" ] ||
         pixied_test_fail "CLI-selected zellij was installed before uninstall"
+}
+
+# US-101-3
+@test "home mode changes require uninstall" {
+    local home="$PIXIED_TEST_ROOT/phase2-homemode-home"
+    local local_home="$PIXIED_TEST_ROOT/phase2-homemode-local"
+    local data="$PIXIED_TEST_ROOT/phase2-homemode-data"
+    local state="$PIXIED_TEST_ROOT/phase2-homemode-state"
+    local fake_source="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local state_file="$state/pixied/machines/phase2-homemode/state"
+    mkdir -p "$home" "$local_home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install
+    assert_success
+    grep -Fq -- 'home_mode=local' "$state_file" ||
+        pixied_test_fail "baseline home mode was not recorded"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
+        --home-mode=nfs --local-home="$local_home"
+    assert_failure 1
+    assert_output --partial 'cannot change home mode during reinstall'
+    grep -Fq -- 'home_mode=local' "$state_file" ||
+        pixied_test_fail "home mode state was changed unexpectedly"
+    grep -Fq -- "local_home=$home" "$state_file" ||
+        pixied_test_fail "local home state was changed unexpectedly"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
+        --local-home="$local_home"
+    assert_failure 1
+    assert_output --partial 'cannot change local home during reinstall'
+    grep -Fq -- "local_home=$home" "$state_file" ||
+        pixied_test_fail "local home state was changed unexpectedly"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
+        --home-mode local
+    assert_success
+}
+
+# US-101-3
+@test "nfs home mode changes require uninstall" {
+    local home="$PIXIED_TEST_ROOT/phase2-nfshome-home"
+    local first_local="$PIXIED_TEST_ROOT/phase2-nfshome-local-one"
+    local second_local="$PIXIED_TEST_ROOT/phase2-nfshome-local-two"
+    local data="$PIXIED_TEST_ROOT/phase2-nfshome-data"
+    local state="$PIXIED_TEST_ROOT/phase2-nfshome-state"
+    local fake_source="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    local cli="$PIXIED_REPO_ROOT/bin/pixied"
+    local state_file="$state/pixied/machines/phase2-nfshome/state"
+    mkdir -p "$home" "$first_local" "$second_local"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-nfshome PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
+        --home-mode nfs --local-home "$first_local"
+    assert_success
+    grep -Fq -- "local_home=$first_local" "$state_file" ||
+        pixied_test_fail "baseline local home was not recorded"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-nfshome PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
+        --home-mode local
+    assert_failure 1
+    assert_output --partial 'cannot change home mode during reinstall'
+    grep -Fq -- 'home_mode=nfs' "$state_file" ||
+        pixied_test_fail "home mode state was changed unexpectedly"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-nfshome PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
+        --home-mode nfs --local-home "$second_local"
+    assert_failure 1
+    assert_output --partial 'cannot change local home during reinstall'
+    grep -Fq -- "local_home=$first_local" "$state_file" ||
+        pixied_test_fail "local home state was changed unexpectedly"
 }
 
 # US-101-3
@@ -2599,7 +2766,6 @@ CASES
     local config="$PIXIED_TEST_ROOT/phase4-sync-config"
     local state="$PIXIED_TEST_ROOT/phase4-sync-state"
     local state_file="$state/pixied/machines/phase4-sync/state"
-    local baseline="$state/pixied/machines/phase4-sync/sync-baseline"
     mkdir -p "$home" "$local_home"
     printf 'account bashrc v1\n' >"$home/.bashrc"
     printf 'account bash profile v1\n' >"$home/.bash_profile"
@@ -2653,7 +2819,6 @@ CASES
     assert_equal 'local outside' "$(<"$local_home/not-allowlisted")"
     assert_equal 'account zshenv' "$(<"$home/.zshenv")"
     assert_equal 'local zshenv' "$(<"$local_home/.zshenv")"
-    [ ! -e "$baseline" ] || pixied_test_fail "sync baseline should not be created"
     [ -f "$state_file" ] || pixied_test_fail "state file was not retained"
 
     # Deleting a seeded local file re-seeds it from the account on the next run.
@@ -2736,46 +2901,6 @@ CASES
     assert_output --partial 'sync source is not a regular file'
     [ ! -e "$root/destination/copied" ] ||
         pixied_test_fail "symlink source was copied"
-}
-
-@test "atomic sync remove tolerates an in-bounds symlink" {
-    local root="$PIXIED_TEST_ROOT/phase4-remove-link-home"
-    mkdir -p "$root"
-    printf 'linked content\n' >"$root/real-zshrc"
-    ln -s "$root/real-zshrc" "$root/.zshrc"
-
-    run bash -c '
-        . "$1/lib/common.sh"
-        . "$1/lib/paths.sh"
-        . "$1/lib/state.sh"
-        . "$1/lib/sync.sh"
-        pixied_enable_strict_mode
-        PIXIED_ACCOUNT_HOME="$2" pixied_sync_remove_file "$2/.zshrc"
-    ' bash "$PIXIED_REPO_ROOT" "$root"
-    assert_success
-    [ ! -e "$root/.zshrc" ] || pixied_test_fail "symlink entry was not removed"
-    [ -f "$root/real-zshrc" ] || pixied_test_fail "symlink target was removed"
-}
-
-@test "atomic sync remove rejects a symlink escaping account home" {
-    local root="$PIXIED_TEST_ROOT/phase4-remove-escape-home"
-    local outside="$PIXIED_TEST_ROOT/phase4-remove-escape-outside"
-    mkdir -p "$root" "$outside"
-    printf 'escaping\n' >"$outside/real-zshrc"
-    ln -s "$outside/real-zshrc" "$root/.zshrc"
-
-    run bash -c '
-        . "$1/lib/common.sh"
-        . "$1/lib/paths.sh"
-        . "$1/lib/state.sh"
-        . "$1/lib/sync.sh"
-        pixied_enable_strict_mode
-        PIXIED_ACCOUNT_HOME="$2" pixied_sync_remove_file "$2/.zshrc"
-    ' bash "$PIXIED_REPO_ROOT" "$root"
-    assert_failure 1
-    assert_output --partial 'sync target symlink escapes account home'
-    [ -L "$root/.zshrc" ] || pixied_test_fail "escaping symlink was removed"
-    [ -f "$outside/real-zshrc" ] || pixied_test_fail "external target was removed"
 }
 
 # US-106-3
@@ -3006,7 +3131,7 @@ CASES
     assert_output --partial 'unknown state key: unknown'
 
     sed -i '/^unknown=value$/d' "$state_file"
-    printf 'unit_path=/run/user/1000/pixied.service\n' >>"$state_file"
+    printf 'removed_key=/run/user/1000/pixied.service\n' >>"$state_file"
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" XDG_BIN_HOME="$bin" PIXIED_HOME_MODE=local \
         PIXIED_MACHINE_ID=phase1-reject bash -c '
@@ -3017,9 +3142,9 @@ CASES
         pixied_state_load
     ' bash "$PIXIED_REPO_ROOT"
     assert_failure 1
-    assert_output --partial 'obsolete state key: unit_path; reinstall PixiEden before continuing'
+    assert_output --partial 'unknown state key: removed_key'
 
-    sed -i '/^unit_path=/d' "$state_file"
+    sed -i '/^removed_key=/d' "$state_file"
     mv "$state_file" "$state_file.real"
     ln -s "$state_file.real" "$state_file"
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
@@ -3311,7 +3436,6 @@ config_dir=/forged/config
 state_dir=/forged/state
 command_bin=/forged/bin
 pixi_home=/forged/pixi
-sync_baseline=/forged/sync-baseline
 EOF
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
@@ -3345,7 +3469,6 @@ config_dir=/wrong/config
 state_dir=/wrong/state/dir
 command_bin=/wrong/bin
 pixi_home=/wrong/pixi
-sync_baseline=/wrong/sync-baseline
 EOF
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
@@ -3356,9 +3479,9 @@ EOF
     assert_failure
     assert_output --partial 'active runtime state is missing or unverifiable'
 
-    local obsolete="$PIXIED_TEST_ROOT/bad-id-obsolete-state/pixied/machines/real/state"
-    mkdir -p "$(dirname "$obsolete")"
-    cat >"$obsolete" <<'EOF'
+    local unknown_key="$PIXIED_TEST_ROOT/bad-id-unknown-state/pixied/machines/real/state"
+    mkdir -p "$(dirname "$unknown_key")"
+    cat >"$unknown_key" <<'EOF'
 state_version=1
 machine_id=real
 account_home=/real/account
@@ -3370,17 +3493,16 @@ config_dir=/real/config
 state_dir=/real/data
 command_bin=/real/bin
 pixi_home=/real/pixi
-systemd_user_dir=/real/systemd
-sync_baseline=/real/sync-baseline
+removed_key=/real/removed
 EOF
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
         PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
-        PIXIED_RUNTIME_STATE_FILE="$obsolete" \
+        PIXIED_RUNTIME_STATE_FILE="$unknown_key" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
     assert_failure
-    assert_output --partial 'obsolete state key'
+    assert_output --partial 'unknown state key: removed_key'
 }
 
 @test "active runtime: identity-changing options are rejected" {
@@ -3618,7 +3740,6 @@ EOF
 
     mkdir -p "${state_b%/*}"
     sed -e "s/^machine_id=$machine_a$/machine_id=$machine_b/" \
-        -e "s#^sync_baseline=.*#sync_baseline=$state/pixied/machines/$machine_b/sync-baseline#" \
         "$state_a" >"$state_b"
     chmod 0600 "$state_b"
 
@@ -3673,24 +3794,19 @@ EOF
         pixied_test_fail "migrated launcher hash was not persisted"
 }
 
-@test "NFS dispatcher migration tolerates stale peer launcher hashes" {
+@test "NFS dispatcher change requires exact launcher hash match" {
     local account_home="$PIXIED_TEST_ROOT/nfs-stale-hash-account"
     local local_home_a="$PIXIED_TEST_ROOT/nfs-stale-hash-local-a"
     local local_home_b="$PIXIED_TEST_ROOT/nfs-stale-hash-local-b"
-    local local_home_c="$PIXIED_TEST_ROOT/nfs-stale-hash-local-c"
     local state="$PIXIED_TEST_ROOT/nfs-stale-hash-state"
     local machine_a=nfs-stale-hash-a
     local machine_b=nfs-stale-hash-b
-    local machine_c=nfs-stale-hash-c
     local data_a="$local_home_a/.local/share/pixied"
     local data_b="$local_home_b/.local/share/pixied"
-    local data_c="$local_home_c/.local/share/pixied"
     local launcher="$account_home/.local/bin/pixied"
     local state_a="$state/pixied/machines/$machine_a/state"
     local state_b="$state/pixied/machines/$machine_b/state"
-    local state_c="$state/pixied/machines/$machine_c/state"
-    local legacy_hash
-    mkdir -p "$account_home" "$local_home_a" "$local_home_b" "$local_home_c"
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b"
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
@@ -3701,88 +3817,48 @@ EOF
 
     printf '#!/usr/bin/env bash\nexec %q "\$@"\n' "$data_a/bin/pixied" >"$launcher"
     chmod 0755 "$launcher"
-    legacy_hash=$(sha256sum "$launcher" | cut -d' ' -f1)
-    sed -i "s/^launcher_hash=.*/launcher_hash=$legacy_hash/" "$state_a"
-    chmod 0600 "$state_a"
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
         PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-    [ -x "$data_b/bin/pixied" ] || pixied_test_fail "machine B payload is missing"
-    grep -Fq -- 'state_file="$state_root/machines/$machine_id/state"' "$launcher" ||
-        pixied_test_fail "machine B did not migrate the launcher"
-    grep -Fq -- "launcher_hash=$legacy_hash" "$state_a" ||
-        pixied_test_fail "machine A stale launcher hash was unexpectedly rewritten"
-
-    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_c" \
-        PIXIED_MACHINE_ID="$machine_c" PIXIED_SESSION_MANAGER=none \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-    [ -x "$data_c/bin/pixied" ] || pixied_test_fail "machine C payload is missing"
-    [ -f "$state_c" ] || pixied_test_fail "machine C state is missing"
-
-    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" \
-        bash "$data_a/bin/pixied" uninstall --yes
-    assert_success
-    [ ! -e "$data_a" ] || pixied_test_fail "machine A payload remains"
-    [ ! -e "$state_a" ] || pixied_test_fail "machine A state remains"
-    [ -f "$state_b" ] || pixied_test_fail "machine B state was removed"
-    [ -f "$state_c" ] || pixied_test_fail "machine C state was removed"
-    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher was removed too early"
-
-    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" \
-        bash "$data_b/bin/pixied" uninstall --yes
-    assert_success
-    [ -f "$state_c" ] || pixied_test_fail "last peer state was removed too early"
-    [ -x "$launcher" ] || pixied_test_fail "shared dispatcher was removed before the last machine"
-
-    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
-        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_c" \
-        PIXIED_MACHINE_ID="$machine_c" \
-        bash "$data_c/bin/pixied" uninstall --yes
-    assert_success
-    [ ! -e "$launcher" ] || pixied_test_fail "last machine left the shared dispatcher"
+    assert_failure
+    assert_output --partial 'existing launcher is not managed by PixiEden'
+    [ -x "$data_a/bin/pixied" ] || pixied_test_fail "machine A payload is missing"
+    [ -f "$state_a" ] || pixied_test_fail "machine A state was removed"
+    if grep -Fq -- 'state_file="$state_root/machines/$machine_id/state"' "$launcher"; then
+        pixied_test_fail "unmanaged launcher was migrated"
+    fi
 }
 
-@test "NFS reinstall rejects a legacy shared payload state" {
+@test "NFS reinstall keeps an explicit shared data layout" {
     local account_home="$PIXIED_TEST_ROOT/nfs-legacy-account"
     local local_home="$PIXIED_TEST_ROOT/nfs-legacy-local"
     local state="$PIXIED_TEST_ROOT/nfs-legacy-state"
     local machine_id=nfs-legacy-machine
-    local data="$local_home/.local/share/pixied"
+    local shared_base="$PIXIED_TEST_ROOT/nfs-legacy-shared"
+    local shared_data="$shared_base/pixied"
     local state_file="$state/pixied/machines/$machine_id/state"
-    mkdir -p "$account_home" "$local_home"
+    mkdir -p "$account_home" "$local_home" "$shared_base"
 
-    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+    run env -i PATH="$PATH" HOME="$account_home" XDG_DATA_HOME="$shared_base" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
+    grep -Fq -- "data_dir=$shared_data" "$state_file" ||
+        pixied_test_fail "explicit shared data home was not persisted"
 
-    sed -i \
-        -e "s#^data_dir=.*#data_dir=$account_home/.local/share/pixied#" \
-        -e "s#^config_dir=.*#config_dir=$account_home/.config/pixied#" \
-        "$state_file"
-    chmod 0600 "$state_file"
-
-    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+    run env -i PATH="$PATH" HOME="$account_home" XDG_DATA_HOME="$shared_base" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID="$machine_id" \
-        bash "$data/bin/pixied" install --yes
-    assert_failure 1
-    assert_output --partial 'existing NFS state uses legacy shared runtime paths'
-    [ -f "$state_file" ] || pixied_test_fail "legacy state was removed"
-    [ -x "$data/bin/pixied" ] || pixied_test_fail "payload changed after legacy state rejection"
+        bash "$shared_data/bin/pixied" install --yes
+    assert_success
+    grep -Fq -- "data_dir=$shared_data" "$state_file" ||
+        pixied_test_fail "explicit shared data layout was not kept"
+    [ -f "$state_file" ] || pixied_test_fail "state was removed"
 }
 
 @test "concurrent runtime: active NFS runtime operates over a machine lease" {
