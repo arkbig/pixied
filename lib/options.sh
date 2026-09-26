@@ -270,9 +270,9 @@ pixied_options_prompt() {
     fi
 }
 
-# @description Set the selected NFS local home and clear a derived Pixi home.
-# A local home chosen by the user must be used to derive the dedicated Pixi
-# home again during the final path resolution.
+# @description Set the selected NFS local home and clear derived paths.
+# A local home chosen by the user must be used to derive the data, config, and
+# dedicated Pixi paths again during the final path resolution.
 #
 # @arg $1 string The selected local home path.
 # @set PIXIED_LOCAL_HOME string The selected local home.
@@ -282,6 +282,7 @@ pixied_options_select_local_home() {
     export PIXIED_LOCAL_HOME=$1
     PIXIED_OPTION_CLI_SET[local_home]=1
     PIXIED_REQUESTED_LOCAL_HOME=$1
+    unset PIXIED_DATA_DIR PIXIED_CONFIG_DIR
     if ! pixied_options_is_explicit pixi_home; then
         unset PIXIED_PIXI_HOME
     fi
@@ -405,6 +406,7 @@ pixied_options_wizard() {
                 export PIXIED_HOME_MODE=$home_mode
                 PIXIED_OPTION_CLI_SET[home_mode]=1
                 PIXIED_REQUESTED_HOME_MODE=$home_mode
+                unset PIXIED_DATA_DIR PIXIED_CONFIG_DIR
                 if ! pixied_options_is_explicit pixi_home; then
                     unset PIXIED_PIXI_HOME
                 fi

@@ -857,13 +857,25 @@ MKDIR
     command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
     local home="$PIXIED_TEST_ROOT/wizard-nfs-home"
     local local_home="$PIXIED_TEST_ROOT/wizard-nfs-local"
-    local data="$PIXIED_TEST_ROOT/wizard-nfs-data"
-    local config="$PIXIED_TEST_ROOT/wizard-nfs-config"
     local state="$PIXIED_TEST_ROOT/wizard-nfs-state"
+    local fake_bin="$PIXIED_TEST_ROOT/wizard-nfs-fake-bin"
     local machine_id=wizard-nfs-machine
-    mkdir -p "$home" "$local_home"
+    mkdir -p "$home" "$local_home" "$fake_bin"
+    cat >"$fake_bin/mkdir" <<'MKDIR'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+for argument in "$@"; do
+    case "$argument" in
+    /local | /local/*)
+        exit 77
+        ;;
+    esac
+done
+exec /usr/bin/mkdir "$@"
+MKDIR
+    chmod 0755 "$fake_bin/mkdir"
 
-    run env -i PATH="$PATH" HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+    run env -i PATH="$fake_bin:$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
@@ -880,6 +892,9 @@ MKDIR
         pixied_test_fail "NFS wizard state is missing"
     grep -Fq -- "local_home=$local_home" "$state/pixied/machines/$machine_id/state" ||
         pixied_test_fail "selected local home was not persisted"
+    grep -Fq -- "data_dir=$local_home/.local/share/pixied" \
+        "$state/pixied/machines/$machine_id/state" ||
+        pixied_test_fail "selected local home was not used for the data directory"
 }
 
 @test "interactive NFS install creates a missing local home after confirmation" {
