@@ -28,7 +28,6 @@ PRD（目的・背景）
 - `UC-xx`: ユースケースの識別子
 - `US-xxx`: ユーザーストーリーと受入条件の識別子
 - `ADR-xxx`: 意思決定記録の識別子
-
 USは必ず関連UCのIDを持ち、設計判断が関係する場合は関連ADRのIDを持つ。受入条件の実装上の正はテストコードとし、この文書は要求から検証への追跡に使う。
 
 ## 実装の正
@@ -66,9 +65,13 @@ tests/run.sh all
 
 トップレベルの`README.ja.md`は初見の使用者向けに最小限とし、解決順序や所有境界などの詳細はここに記載する。
 
-## 初期版のNFS境界
+## NFS local homeのpreflight
 
-`nfs`modeの`PIXIED_LOCAL_HOME`は、PixiEdenのinstall前に環境側で作成済みでなければならない。installはdirectoryの存在、owner、書込み権限、account homeとの分離、local filesystem条件を検証するが、directoryや親directoryを作成しない。既定候補の`/local/$USER`も同様に事前準備が必要である。
+`nfs`modeでは、interactive installのpreflightがlocal home候補を表示する。既定候補の`/local/$USER`または利用者が入力したabsolute pathが未作成の場合、`Create local home '<path>'? [y/N]`で明示確認する。肯定時だけdirectoryを作成し、payload deployment、state書込み、Pixi provisioningの前に、directoryの存在、owner、書込み権限、account homeとの分離、local filesystem条件をvalidationする。
+
+`--yes`、またはstdin/stdoutのどちらかがTTYでない実行(`curl | bash`を含む)ではpromptもdirectory作成も行わない。missing local homeは`--local-home PATH`を示すerrorで終了するため、事前にmachine-local directoryを作成しておく。remoteでinteractive wizardを使う場合は、installerをtemporary fileへdownloadしてTTYから実行するか、clone済みrepositoryの`install-local.sh`をTTYから実行する。
+
+既存stateのreinstallでは、local homeの変更禁止とactive runtimeのidentity制約をpreflightより前に検証する。preflightの作成確認は、検証済みstateが示すlocal homeだけを対象にする。
 
 local homeの作成状態はNFS同期の有無とは別である。`nfs`modeでは、account homeとlocal homeの間でhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけをallowlistに従って同期する。初期版にはlocal home作成用のサブコマンドを設けない。将来chezmoiを導入する場合のdotfiles所有権、NFS同期の廃止・代替・併用は、初期版とは別の設計判断と移行計画で扱う。
 

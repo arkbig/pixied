@@ -558,6 +558,94 @@ PYPROJECT
     assert_output --partial 'Usage: pixied generate <direnv|devcontainer|dockerfile> [OPTIONS]'
 }
 
+@test "local installer rejects an unspecified NFS local home before deployment" {
+    local archive="$PIXIED_TEST_ROOT/missing-nfs-local-release.tar.gz"
+    local fake_bin="$PIXIED_TEST_ROOT/missing-nfs-local-bin"
+    local mkdir_log="$PIXIED_TEST_ROOT/missing-nfs-local-mkdir.log"
+    local home="$PIXIED_TEST_ROOT/missing-nfs-local-home"
+    local test_user=pixied-missing-nfs-local
+    local expected_local_home="/local/$test_user"
+    mkdir -p "$fake_bin" "$home"
+    cat >"$fake_bin/curl" <<'CURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+output=""
+url=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --output | -o)
+        output=$2
+        shift 2
+        ;;
+    *)
+        url=$1
+        shift
+        ;;
+    esac
+done
+[ -n "$output" ]
+if [[ "$url" == *.sha256 ]]; then
+    sha256sum "${PIXIED_TEST_RELEASE_ARCHIVE:?}" |
+        sed 's#  .*#  pixied.tar.gz#' >"$output"
+else
+    cp "${PIXIED_TEST_RELEASE_ARCHIVE:?}" "$output"
+fi
+CURL
+    cat >"$fake_bin/mkdir" <<'MKDIR'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+for argument in "$@"; do
+    if [ "$argument" = "${PIXIED_EXPECTED_MKDIR_PATH:?}" ]; then
+        printf '%s\n' "$*" >>"${PIXIED_MKDIR_LOG:?}"
+        exit 77
+    fi
+done
+exec /usr/bin/mkdir "$@"
+MKDIR
+    chmod 0755 "$fake_bin/curl" "$fake_bin/mkdir"
+    : >"$mkdir_log"
+
+    run bash "$PIXIED_REPO_ROOT/scripts/package-release.sh" "$archive"
+    assert_success
+
+    run env -i PATH="$fake_bin:/usr/bin:/bin" HOME="$home" USER="$test_user" \
+        PIXIED_HOME_MODE=nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_EXPECTED_MKDIR_PATH="$expected_local_home" PIXIED_MKDIR_LOG="$mkdir_log" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_failure 1
+    assert_output --partial 'selected NFS mode requires a local home'
+    assert_output --partial '--local-home PATH'
+    [ ! -s "$mkdir_log" ] ||
+        pixied_test_fail "installer attempted to create $expected_local_home"
+
+    : >"$mkdir_log"
+    run bash -c '
+        printf "" |
+            env -i PATH="$1" HOME="$2" USER="$3" \
+                XDG_DATA_HOME="$4" XDG_CONFIG_HOME="$5" XDG_STATE_HOME="$6" \
+                PIXIED_HOME_MODE=nfs PIXIED_SESSION_MANAGER=none \
+                PIXIED_EXPECTED_MKDIR_PATH="$7" PIXIED_MKDIR_LOG="$8" \
+                PIXIED_TEST_RELEASE_ARCHIVE="$9" \
+                PIXIED_RELEASE_URL=https://example.invalid/pixied.tar.gz \
+                bash "${10}" --home-mode nfs --session-manager none
+    ' bash "$fake_bin:/usr/bin:/bin" "$home" "$test_user" \
+        "$PIXIED_TEST_ROOT/missing-nfs-pipe-data" \
+        "$PIXIED_TEST_ROOT/missing-nfs-pipe-config" \
+        "$PIXIED_TEST_ROOT/missing-nfs-pipe-state" \
+        "$expected_local_home" "$mkdir_log" "$archive" "$PIXIED_REPO_ROOT/install.sh"
+    assert_failure 1
+    assert_output --partial 'selected NFS mode requires a local home'
+    assert_output --partial '--local-home PATH'
+    [ ! -s "$mkdir_log" ] ||
+        pixied_test_fail "pipe installer attempted to create $expected_local_home"
+    [ ! -e "$expected_local_home" ] ||
+        pixied_test_fail "pipe installer created $expected_local_home"
+    [ ! -e "$PIXIED_TEST_ROOT/missing-nfs-pipe-data/pixied" ] ||
+        pixied_test_fail "pipe installer created a payload before local-home validation"
+    [ ! -e "$PIXIED_TEST_ROOT/missing-nfs-pipe-state/pixied" ] ||
+        pixied_test_fail "pipe installer created state before local-home validation"
+}
+
 @test "generated project shell hook keeps Pixi variables isolated" {
     local home="$PIXIED_TEST_ROOT/project-hook-home"
     local data="$PIXIED_TEST_ROOT/project-hook-data"
@@ -785,10 +873,155 @@ PYPROJECT
     assert_success
     assert_output --partial "Local home: $local_home"
     assert_output --partial "Pixi home: $local_home/.local/share/pixied/pixi"
+    local local_home_prompt_count
+    local_home_prompt_count=$(printf '%s\n' "$output" | command grep -cF 'Local home (current:' || true)
+    assert_equal 1 "$local_home_prompt_count"
     [ -f "$state/pixied/machines/$machine_id/state" ] ||
         pixied_test_fail "NFS wizard state is missing"
     grep -Fq -- "local_home=$local_home" "$state/pixied/machines/$machine_id/state" ||
         pixied_test_fail "selected local home was not persisted"
+}
+
+@test "interactive NFS install creates a missing local home after confirmation" {
+    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
+    local home="$PIXIED_TEST_ROOT/create-nfs-home"
+    local local_home="$PIXIED_TEST_ROOT/create-nfs-local"
+    local data="$PIXIED_TEST_ROOT/create-nfs-data"
+    local config="$PIXIED_TEST_ROOT/create-nfs-config"
+    local state="$PIXIED_TEST_ROOT/create-nfs-state"
+    local machine_id=create-nfs-machine
+    mkdir -p "$home"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash -c '
+        printf "%s\n" "" "$1" none "" y "" |
+            script -qec "bash \"$2\"" /dev/null
+    ' bash "$local_home" "$PIXIED_REPO_ROOT/install-local.sh"
+    assert_success
+    assert_output --partial "Create local home '$local_home'? [y/N]"
+    [ -d "$local_home" ] || pixied_test_fail "confirmed local home was not created"
+    [ -f "$state/pixied/machines/$machine_id/state" ] ||
+        pixied_test_fail "state was not created after local home confirmation"
+    grep -Fq -- "local_home=$local_home" "$state/pixied/machines/$machine_id/state" ||
+        pixied_test_fail "created local home was not persisted"
+}
+
+@test "interactive NFS install can choose an existing local home after rejecting creation" {
+    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
+    local home="$PIXIED_TEST_ROOT/reject-nfs-home"
+    local missing_home="$PIXIED_TEST_ROOT/reject-nfs-missing"
+    local existing_home="$PIXIED_TEST_ROOT/reject-nfs-existing"
+    local data="$PIXIED_TEST_ROOT/reject-nfs-data"
+    local config="$PIXIED_TEST_ROOT/reject-nfs-config"
+    local state="$PIXIED_TEST_ROOT/reject-nfs-state"
+    local machine_id=reject-nfs-machine
+    mkdir -p "$home" "$existing_home"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash -c '
+        printf "%s\n" "" "$1" none "" n "$2" "" |
+            script -qec "bash \"$3\"" /dev/null
+    ' bash "$missing_home" "$existing_home" "$PIXIED_REPO_ROOT/install-local.sh"
+    assert_success
+    assert_output --partial "local home was not created: $missing_home"
+    [ ! -e "$missing_home" ] || pixied_test_fail "rejected local home was created"
+    grep -Fq -- "local_home=$existing_home" "$state/pixied/machines/$machine_id/state" ||
+        pixied_test_fail "replacement local home was not persisted"
+}
+
+@test "rejecting an interactive NFS local home creates no payload or state" {
+    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
+    local home="$PIXIED_TEST_ROOT/reject-only-nfs-home"
+    local missing_home="$PIXIED_TEST_ROOT/reject-only-nfs-local"
+    local data="$PIXIED_TEST_ROOT/reject-only-nfs-data"
+    local config="$PIXIED_TEST_ROOT/reject-only-nfs-config"
+    local state="$PIXIED_TEST_ROOT/reject-only-nfs-state"
+    local machine_id=reject-only-nfs-machine
+    mkdir -p "$home"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash -c '
+        printf "%s\n" "" "$1" none "" n |
+            script -qec "bash \"$2\"" /dev/null
+    ' bash "$missing_home" "$PIXIED_REPO_ROOT/install-local.sh"
+    assert_failure 1
+    assert_output --partial "local home was not created: $missing_home"
+    [ ! -e "$missing_home" ] || pixied_test_fail "rejected local home was created"
+    [ ! -e "$data/pixied" ] || pixied_test_fail "payload was created before confirmation"
+    [ ! -e "$state/pixied" ] || pixied_test_fail "state was created before confirmation"
+}
+
+@test "direct NFS install creates a missing local home after confirmation" {
+    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
+    local home="$PIXIED_TEST_ROOT/direct-create-nfs-home"
+    local local_home="$PIXIED_TEST_ROOT/direct-create-nfs-local"
+    local data="$PIXIED_TEST_ROOT/direct-create-nfs-data"
+    local config="$PIXIED_TEST_ROOT/direct-create-nfs-config"
+    local state="$PIXIED_TEST_ROOT/direct-create-nfs-state"
+    local machine_id=direct-create-nfs-machine
+    mkdir -p "$home"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash -c '
+        printf "%s\n" "" "$1" none "" y "" |
+            script -qec "bash \"$2\" install" /dev/null
+    ' bash "$local_home" "$PIXIED_REPO_ROOT/bin/pixied"
+    assert_success
+    assert_output --partial "Create local home '$local_home'? [y/N]"
+    [ -d "$local_home" ] || pixied_test_fail "direct install did not create local home"
+    [ -f "$state/pixied/machines/$machine_id/state" ] ||
+        pixied_test_fail "direct install state is missing"
+    grep -Fq -- "local_home=$local_home" "$state/pixied/machines/$machine_id/state" ||
+        pixied_test_fail "direct install local home was not persisted"
+}
+
+@test "noninteractive NFS install rejects missing default and explicit local homes" {
+    local home="$PIXIED_TEST_ROOT/noninteractive-nfs-home"
+    local data="$PIXIED_TEST_ROOT/noninteractive-nfs-data"
+    local config="$PIXIED_TEST_ROOT/noninteractive-nfs-config"
+    local state="$PIXIED_TEST_ROOT/noninteractive-nfs-state"
+    local explicit_home="$PIXIED_TEST_ROOT/noninteractive-nfs-explicit"
+    local test_user=pixied-noninteractive-nfs
+    local default_home="/local/$test_user"
+    local machine_id=noninteractive-nfs-machine
+    mkdir -p "$home"
+
+    run env -i PATH="$PATH" HOME="$home" USER="$test_user" \
+        PIXIED_HOME_MODE=nfs XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_SESSION_MANAGER=none \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_failure 1
+    assert_output --partial "selected NFS mode requires a local home"
+    assert_output --partial "$default_home"
+    [ ! -e "$default_home" ] || pixied_test_fail "missing default local home was created"
+    [ ! -e "$data/pixied" ] || pixied_test_fail "payload was created for missing default local home"
+    [ ! -e "$state/pixied" ] || pixied_test_fail "state was created for missing default local home"
+
+    run env -i PATH="$PATH" HOME="$home" USER="$test_user" \
+        PIXIED_HOME_MODE=nfs XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_SESSION_MANAGER=none \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes \
+        --home-mode nfs --local-home "$explicit_home"
+    assert_failure 1
+    assert_output --partial "selected NFS mode requires a local home"
+    assert_output --partial "$explicit_home"
+    [ ! -e "$explicit_home" ] || pixied_test_fail "missing explicit local home was created"
+    [ ! -e "$data/pixied" ] || pixied_test_fail "payload was created for missing explicit local home"
+    [ ! -e "$state/pixied" ] || pixied_test_fail "state was created for missing explicit local home"
 }
 
 @test "fresh NFS install keeps its machine-local home while seeding shared defaults" {
@@ -899,6 +1132,72 @@ CURL
     [ -x "$data/pixied/bin/pixied" ] || pixied_test_fail "remote release installer did not deploy the CLI"
     [ -f "$state/pixied/machines/phase7-release/state" ] ||
         pixied_test_fail "remote release installer did not create state"
+}
+
+@test "remote installer rejects an unspecified NFS local home before deployment" {
+    local archive="$PIXIED_TEST_ROOT/pixied-missing-nfs-release.tar.gz"
+    local fake_bin="$PIXIED_TEST_ROOT/missing-nfs-release-fake-bin"
+    local mkdir_log="$PIXIED_TEST_ROOT/missing-nfs-release-mkdir.log"
+    local home="$PIXIED_TEST_ROOT/missing-nfs-release-home"
+    local test_user=pixied-missing-nfs-release
+    local expected_local_home="/local/$test_user"
+    mkdir -p "$fake_bin" "$home"
+    cat >"$fake_bin/curl" <<'CURL'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+output=""
+url=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --output | -o)
+        output=$2
+        shift 2
+        ;;
+    *)
+        url=$1
+        shift
+        ;;
+    esac
+done
+[ -n "$output" ]
+if [[ "$url" == *.sha256 ]]; then
+    sha256sum "${PIXIED_TEST_RELEASE_ARCHIVE:?}" |
+        sed 's#  .*#  pixied.tar.gz#' >"$output"
+else
+    cp "${PIXIED_TEST_RELEASE_ARCHIVE:?}" "$output"
+fi
+CURL
+    cat >"$fake_bin/mkdir" <<'MKDIR'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+for argument in "$@"; do
+    if [ "$argument" = "${PIXIED_EXPECTED_MKDIR_PATH:?}" ]; then
+        printf '%s\n' "$*" >>"${PIXIED_MKDIR_LOG:?}"
+        exit 77
+    fi
+done
+exec /usr/bin/mkdir "$@"
+MKDIR
+    chmod 0755 "$fake_bin/curl" "$fake_bin/mkdir"
+    : >"$mkdir_log"
+
+    run bash "$PIXIED_REPO_ROOT/scripts/package-release.sh" "$archive"
+    assert_success
+
+    run env -i PATH="$fake_bin:/usr/bin:/bin" HOME="$home" USER="$test_user" \
+        XDG_DATA_HOME="$PIXIED_TEST_ROOT/missing-nfs-release-data" \
+        XDG_CONFIG_HOME="$PIXIED_TEST_ROOT/missing-nfs-release-config" \
+        XDG_STATE_HOME="$PIXIED_TEST_ROOT/missing-nfs-release-state" \
+        PIXIED_HOME_MODE=nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_EXPECTED_MKDIR_PATH="$expected_local_home" PIXIED_MKDIR_LOG="$mkdir_log" \
+        PIXIED_TEST_RELEASE_ARCHIVE="$archive" \
+        PIXIED_RELEASE_URL=https://example.invalid/pixied.tar.gz \
+        bash "$PIXIED_REPO_ROOT/install.sh" --home-mode nfs --session-manager none --yes
+    assert_failure 1
+    assert_output --partial 'selected NFS mode requires a local home'
+    assert_output --partial '--local-home PATH'
+    [ ! -s "$mkdir_log" ] ||
+        pixied_test_fail "installer attempted to create $expected_local_home"
 }
 
 @test "remote installer requires the packaged archive root" {

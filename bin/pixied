@@ -309,8 +309,13 @@ pixied_install() {
         # machine so a fresh NFS host inherits a consistent configuration.
         pixied_options_apply_peer_defaults
     fi
-    pixied_options_wizard "$state_exists"
+    if [ "${PIXIED_INSTALL_BOOTSTRAP_CONFIRMED:-0}" -eq 1 ]; then
+        :
+    else
+        pixied_options_wizard "$state_exists"
+    fi
     pixied_options_validate_state_transition
+    pixied_options_preflight_nfs_local_home "$state_exists"
     pixied_resolve_paths
     pixied_confirm_pixi_home
     pixied_options_confirm_install

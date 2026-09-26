@@ -53,11 +53,26 @@ fi
 
 Opening a new terminal or SSH session enables the dedicated runtime. When Zellij is enabled, it attaches to or creates the dedicated `pixied` session.
 
-When using it with an NFS-shared home, create a machine-local directory in advance before installation. PixiEden does not create it.
+When using it with an NFS-shared home, use a machine-local directory that you can create and own. In an interactive install, PixiEden reports a missing directory and can create the selected path only after you confirm it, before deployment. With `--yes`, or when standard input or output is not a TTY such as a `curl | bash` install, it never prompts or creates the directory, so create it in advance.
 
 ```bash
 mkdir -p /scratch/$USER
 ./install-local.sh --home-mode nfs --local-home /scratch/$USER
+```
+
+`/scratch` is an example; replace it with a path on a local filesystem that the user can create and own. To install from the public Release, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh |
+  bash -s -- --home-mode nfs --local-home "/scratch/$USER" --yes
+```
+
+To use the interactive wizard from a remote host, download the installer and run it from a TTY instead of piping it to Bash:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh \
+  -o /tmp/pixied-install.sh
+bash /tmp/pixied-install.sh --home-mode nfs
 ```
 
 Settings are confirmed with an interactive wizard. Use `--yes` to proceed non-interactively. See the option list with `pixied install --help`.
@@ -90,7 +105,7 @@ pixied generate dockerfile
 
 ## Notes on NFS-Shared Homes
 
-Create the local home used in `nfs` mode before installation. PixiEden does not create it automatically. `install` only validates existence, owner, write permission, separation from the account home, and local filesystem conditions.
+For an interactive `nfs` install, PixiEden can create a missing selected local home after an explicit confirmation, then validates its existence, owner, write permission, separation from the account home, and local filesystem conditions before deployment. With `--yes` or a non-TTY input such as `curl | bash`, it never prompts or creates a directory; create the local home before installation instead. A reinstall validates the saved identity before any creation confirmation.
 
 In NFS mode, only the 8 files directly under the home (`.bashrc`, `.bash_profile`, `.profile`, `.bash_logout`, `.zshrc`, `.zprofile`, `.zlogin`, `.zlogout`) are synchronized between the account home and the local home. The account home is treated as canonical, and files are copied one-way `account→local` to the local home at startup of `pixied shell` or `pixied run`. They are not written back to the account home on exit.
 
@@ -110,7 +125,7 @@ Finally, manually remove the PixiEden hook block from the added shell configurat
 
 ## Documentation
 
-[Developer documentation](docs/README.ja.md)
+[Developer documentation](docs/README.md)
 
 ## Similar Software
 

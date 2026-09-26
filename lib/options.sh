@@ -14,6 +14,8 @@ declare -gA PIXIED_OPTION_CLI_SET=()
 declare -gA PIXIED_OPTION_ENV_SET=()
 declare -g PIXIED_REQUESTED_HOME_MODE=""
 declare -g PIXIED_REQUESTED_LOCAL_HOME=""
+declare -g PIXIED_OPTIONS_WIZARD_COMPLETED=0
+export PIXIED_OPTIONS_WIZARD_COMPLETED
 
 # @description Record whether an option was supplied by the environment.
 # @exitcode 0 Always.
@@ -268,6 +270,107 @@ pixied_options_prompt() {
     fi
 }
 
+# @description Set the selected NFS local home and clear a derived Pixi home.
+# A local home chosen by the user must be used to derive the dedicated Pixi
+# home again during the final path resolution.
+#
+# @arg $1 string The selected local home path.
+# @set PIXIED_LOCAL_HOME string The selected local home.
+# @set PIXIED_REQUESTED_LOCAL_HOME string The requested local home.
+# @exitcode 0 Always.
+pixied_options_select_local_home() {
+    export PIXIED_LOCAL_HOME=$1
+    PIXIED_OPTION_CLI_SET[local_home]=1
+    PIXIED_REQUESTED_LOCAL_HOME=$1
+    if ! pixied_options_is_explicit pixi_home; then
+        unset PIXIED_PIXI_HOME
+    fi
+}
+
+# @description Resolve, select, and validate the NFS local home before side effects.
+# Existing paths are validated immediately. On a fresh interactive install, a
+# missing candidate can be replaced with another absolute path or created after
+# explicit confirmation. Non-interactive installs and reinstalls never prompt
+# or create a directory.
+#
+# @arg $1 integer Whether a state file already exists.
+# @set PIXIED_LOCAL_HOME string The confirmed local home.
+# @exitcode 0 When the local home is valid or the selected mode is local.
+# @exitcode 1 When the local home is missing or invalid.
+pixied_options_preflight_nfs_local_home() {
+    local state_exists=${1:-0}
+    local local_home default_local_home answer prompt_for_path
+
+    [ "${PIXIED_HOME_MODE:-local}" = nfs ] || return 0
+
+    default_local_home=$(pixied_nfs_local_home_default)
+    local_home=${PIXIED_LOCAL_HOME:-$default_local_home}
+    export PIXIED_LOCAL_HOME=$local_home
+
+    if [ -d "$local_home" ]; then
+        PIXIED_LOCAL_HOME=$(pixied_validate_nfs_local_home "$local_home")
+        return 0
+    fi
+
+    if [ "${PIXIED_INSTALL_ASSUME_YES:-0}" -eq 1 ] ||
+        ! [ -t 0 ] || ! [ -t 1 ]; then
+        pixied_validate_nfs_local_home "$local_home" >/dev/null
+        return 1
+    fi
+
+    if ! pixied_options_is_explicit local_home && [ "$local_home" = "$default_local_home" ]; then
+        pixied_warn "default NFS local home does not exist: $local_home"
+    else
+        pixied_warn "selected NFS local home does not exist: $local_home"
+    fi
+
+    prompt_for_path=0
+    if [ "$state_exists" -eq 0 ]; then
+        pixied_options_is_explicit local_home || prompt_for_path=1
+    fi
+    while :; do
+        if [ "$state_exists" -eq 0 ] && [ "$prompt_for_path" -eq 1 ]; then
+            pixied_options_prompt "Local home (current: $local_home): "
+            answer=${PIXIED_OPTIONS_ANSWER:-$local_home}
+            case "$answer" in
+            /*) ;;
+            *)
+                pixied_warn "local home must be an absolute path"
+                continue
+                ;;
+            esac
+            local_home=$answer
+            pixied_options_select_local_home "$local_home"
+            prompt_for_path=0
+            if [ -d "$local_home" ]; then
+                PIXIED_LOCAL_HOME=$(pixied_validate_nfs_local_home "$local_home")
+                return 0
+            fi
+        fi
+
+        pixied_options_prompt "Create local home '$local_home'? [y/N] "
+        answer=${PIXIED_OPTIONS_ANSWER,,}
+        case "$answer" in
+        y | yes)
+            pixied_have_cmd mkdir || pixied_die "required command not found: mkdir"
+            if ! pixied_run mkdir -p -- "$local_home"; then
+                pixied_die "could not create local home: $local_home"
+            fi
+            PIXIED_LOCAL_HOME=$(pixied_validate_nfs_local_home "$local_home")
+            return 0
+            ;;
+        *)
+            if [ "$state_exists" -eq 1 ]; then
+                pixied_validate_nfs_local_home "$local_home" >/dev/null
+                return 1
+            fi
+            pixied_warn "local home was not created: $local_home"
+            prompt_for_path=1
+            ;;
+        esac
+    done
+}
+
 # @description Ask for and validate the installation settings in an interactive wizard.
 # The current resolved values are used as defaults. Explicit command-line and
 # environment values can still be reviewed and changed by the user. On a
@@ -282,6 +385,7 @@ pixied_options_wizard() {
     local answer home_mode local_home local_home_default session_manager
     local machine_id previous_machine_id
 
+    PIXIED_OPTIONS_WIZARD_COMPLETED=0
     [ "${PIXIED_INSTALL_ASSUME_YES:-0}" -eq 0 ] || return 0
     if ! [ -t 0 ] || ! [ -t 1 ]; then
         return 0
@@ -304,6 +408,10 @@ pixied_options_wizard() {
                 if ! pixied_options_is_explicit pixi_home; then
                     unset PIXIED_PIXI_HOME
                 fi
+                if [ "$home_mode" = nfs ] && ! pixied_options_is_explicit local_home; then
+                    unset PIXIED_LOCAL_HOME
+                    PIXIED_REQUESTED_LOCAL_HOME=""
+                fi
                 break
                 ;;
             *) pixied_warn "choose local or nfs" ;;
@@ -311,9 +419,9 @@ pixied_options_wizard() {
         done
 
         if [ "$home_mode" = nfs ]; then
-            local_home_default=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
-            if [ "$local_home_default" = "$PIXIED_ACCOUNT_HOME" ]; then
-                local_home_default=/local/${USER:-$(id -un)}
+            local_home_default=${PIXIED_LOCAL_HOME:-$(pixied_nfs_local_home_default)}
+            if [ ! -d "$local_home_default" ]; then
+                pixied_warn "default NFS local home does not exist: $local_home_default"
             fi
             local_home=$local_home_default
             while :; do
@@ -322,9 +430,7 @@ pixied_options_wizard() {
                 case "$answer" in
                 /*)
                     local_home=$answer
-                    export PIXIED_LOCAL_HOME=$local_home
-                    PIXIED_OPTION_CLI_SET[local_home]=1
-                    PIXIED_REQUESTED_LOCAL_HOME=$local_home
+                    pixied_options_select_local_home "$local_home"
                     break
                     ;;
                 *) pixied_warn "local home must be an absolute path" ;;
@@ -363,6 +469,7 @@ pixied_options_wizard() {
     if [ "$state_exists" -eq 1 ] && [ "$machine_id" != "$previous_machine_id" ]; then
         pixied_die "cannot change machine ID during reinstall; run uninstall first"
     fi
+    PIXIED_OPTIONS_WIZARD_COMPLETED=1
 }
 
 # @description Print the resolved installation settings and ask for final approval.
@@ -569,6 +676,14 @@ pixied_options_apply_peer_defaults() {
         [ "$peer_home_mode" = nfs ] || continue
         if ! pixied_options_is_explicit home_mode; then
             export PIXIED_HOME_MODE=$peer_home_mode
+        fi
+        if [ "$peer_home_mode" = nfs ]; then
+            if ! pixied_options_is_explicit local_home; then
+                unset PIXIED_LOCAL_HOME
+            fi
+            if ! pixied_options_is_explicit pixi_home; then
+                unset PIXIED_PIXI_HOME
+            fi
         fi
         if ! pixied_options_is_explicit session_manager; then
             export PIXIED_SESSION_MANAGER=$peer_session

@@ -139,6 +139,34 @@ pixied_detect_home_mode() {
     fi
 }
 
+# @description Print the default machine-local home for NFS mode.
+# @stdout The default local home path.
+# @exitcode 0 Always.
+pixied_nfs_local_home_default() {
+    printf '/local/%s' "${USER:-$(id -un)}"
+}
+
+# @description Validate an existing machine-local home for NFS mode.
+# Checks that the path is a writable directory owned by the current user,
+# differs from the account home, and is on a local filesystem.
+#
+# @arg $1 string The machine-local home path.
+# @stdout The canonical validated path.
+# @exitcode 0 When the local home is valid.
+# @exitcode 1 When the local home does not exist or fails validation.
+pixied_validate_nfs_local_home() {
+    local local_home=${1:-}
+    if [ ! -d "$local_home" ]; then
+        pixied_path_fail "selected NFS mode requires a local home. Create it before installation and make it writable and owned by the current user (for example: mkdir -p -- '$local_home'), or rerun with --local-home PATH pointing to an existing directory"
+    fi
+    local_home=$(pixied_validate_home_directory "$local_home" "local home")
+    [ "$local_home" != "$PIXIED_ACCOUNT_HOME" ] ||
+        pixied_path_fail "NFS local home must differ from account home"
+    pixied_is_local_filesystem "$local_home" ||
+        pixied_path_fail "local home is not on a local filesystem: $local_home"
+    printf '%s' "$local_home"
+}
+
 # @description Validate that the home directory is a directory, is writable, and is owned by the current user.
 # A non-canonical path or one that contains a symlink is not a fatal error; it is
 # reported as a warning and the canonicalized form is used for subsequent checks
@@ -282,16 +310,11 @@ pixied_resolve_paths() {
         esac
 
         if [ "$home_mode" = nfs ]; then
-            local_home=${PIXIED_LOCAL_HOME:-/local/${USER:-$(id -un)}}
+            local_home=${PIXIED_LOCAL_HOME:-$(pixied_nfs_local_home_default)}
             if [ "$validate_home" -eq 1 ]; then
-                if [ ! -d "$local_home" ]; then
-                    pixied_path_fail "selected NFS mode requires a local home. Create it before installation and make it writable and owned by the current user (for example: mkdir -p -- '$local_home'), or rerun with --local-home PATH pointing to an existing directory"
+                if ! local_home=$(pixied_validate_nfs_local_home "$local_home"); then
+                    return 1
                 fi
-                local_home=$(pixied_validate_home_directory "$local_home" "local home")
-                [ "$local_home" != "$account_home" ] ||
-                    pixied_path_fail "NFS local home must differ from account home"
-                pixied_is_local_filesystem "$local_home" ||
-                    pixied_path_fail "local home is not on a local filesystem: $local_home"
             fi
         else
             local_home=$account_home

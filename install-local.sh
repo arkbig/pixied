@@ -47,9 +47,12 @@ USAGE
 # @see pixied_resolve_paths
 # @see pixied_options_parse
 pixied_install_local() {
-    local destination file created_data
+    local destination file created_data state_exists
+    local bootstrap_home_mode bootstrap_local_home bootstrap_session_manager bootstrap_machine_id
+    local bootstrap_wizard_completed bootstrap_skip_wizard
     local pixied_opt_var
     local -A pixied_orig_opt=()
+    local -a delegate_args=()
     local deploy_bin="bin/pixied"
     local deploy_libs=(
         lib/common.sh
@@ -83,9 +86,34 @@ pixied_install_local() {
     # Reject identity-changing options before any deployment work runs, so an
     # active runtime cannot be silently re-pointed by an install invocation.
     pixied_install_assert_active_identity
-    # Deployment only needs the destination paths; install validates the selected
-    # home mode after the interactive wizard has completed.
+
+    # Resolve side-effect-free paths first so the state identity and the NFS
+    # local-home candidate are known before the wizard or deployment runs.
+    pixied_options_apply_defaults
     pixied_resolve_paths 0
+    state_exists=0
+    if [ -e "$PIXIED_STATE_FILE" ] || [ -L "$PIXIED_STATE_FILE" ]; then
+        pixied_state_load "$PIXIED_STATE_FILE"
+        state_exists=1
+        pixied_options_validate_state_transition
+        pixied_options_apply_state
+        pixied_resolve_paths 0
+    else
+        pixied_options_apply_peer_defaults
+    fi
+    pixied_options_wizard "$state_exists"
+    bootstrap_wizard_completed=${PIXIED_OPTIONS_WIZARD_COMPLETED:-0}
+    pixied_options_validate_state_transition
+    pixied_options_preflight_nfs_local_home "$state_exists"
+    # The preflight is the only operation allowed to create a missing NFS local
+    # home. All deployment paths are validated again immediately afterward.
+    pixied_resolve_paths 1
+    bootstrap_home_mode=$PIXIED_HOME_MODE
+    bootstrap_local_home=$PIXIED_LOCAL_HOME
+    bootstrap_session_manager=$PIXIED_SESSION_MANAGER
+    bootstrap_machine_id=$PIXIED_MACHINE_ID
+    bootstrap_skip_wizard=$bootstrap_wizard_completed
+
     destination=$PIXIED_DATA_DIR
     if [ -e "$destination" ] || [ -L "$destination" ]; then
         created_data=0
@@ -269,8 +297,21 @@ pixied_install_local() {
         fi
     done
     # Delegate to the now-promoted CLI. Delegation failures are intentionally not
-    # turned into a deployment rollback.
-    "$destination/bin/pixied" install "$@"
+    # turned into a deployment rollback. When bootstrap already ran the wizard,
+    # pass only its selected values so the deployed CLI does not ask again.
+    delegate_args=("$@")
+    if [ "$bootstrap_skip_wizard" -eq 1 ]; then
+        delegate_args+=(
+            --home-mode "$bootstrap_home_mode"
+            --session-manager "$bootstrap_session_manager"
+            --machine-id "$bootstrap_machine_id"
+        )
+        if [ "$bootstrap_home_mode" = nfs ]; then
+            delegate_args+=(--local-home "$bootstrap_local_home")
+        fi
+        export PIXIED_INSTALL_BOOTSTRAP_CONFIRMED=1
+    fi
+    "$destination/bin/pixied" install "${delegate_args[@]}"
 }
 
 if [ "$#" -eq 1 ] && [ "$1" = '--help' ]; then

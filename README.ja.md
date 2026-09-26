@@ -52,14 +52,22 @@ fi
 
 新しいターミナルやSSHセッションを開くと専用runtimeが有効になる。Zellijを有効にした場合は専用の`pixied`sessionへattachまたは作成する。
 
-NFS共有ホームで使う場合は、install前にmachine-localなdirectoryを事前に作成しておく。PixiEdenは作成しません。
+NFS共有ホームで使う場合は、マシンローカルなディレクトリを使う。未作成の選択パスなら表示し利用者が確認した後、PixiEdenが作成します。`--yes`、または`curl | bash`のようにstdin/stdoutがTTYでないインストールでは確認も作成も行わないため、事前に作成しておく必要があります。
+
+`/scratch`は例であり、利用者が作成・所有できるマシンローカルなパスへ置き換える。公開Releaseからインストールする場合は次を実行する。
 
 ```bash
-mkdir -p /scratch/$USER
-./install-local.sh --home-mode nfs --local-home /scratch/$USER
+curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh |
+  bash -s -- --home-mode nfs --local-home "/scratch/$USER" --yes
 ```
 
-設定は対話wizardで確認する。非対話で進める場合は`--yes`を使う。optionの一覧は`pixied install --help`で確認する。
+公開Releaseから対話ウィザードを使う場合は、pipeで実行せず、インストーラーをダウンロードしてTTYから実行する。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh \
+  -o /tmp/pixied-install.sh
+bash /tmp/pixied-install.sh --home-mode nfs
+```
 
 ## コマンド
 
@@ -71,7 +79,6 @@ pixied hook <bash|zsh>       シェル初期化コードを出力
 pixied install               環境をインストールまたは修復
 pixied uninstall             PixiEden管理対象を整理
 pixied generate <format>     プロジェクト連携ファイルを生成
-pixied help                  ヘルプ表示
 pixied version               バージョン表示
 ```
 
@@ -89,7 +96,7 @@ pixied generate dockerfile
 
 ## NFS共有ホームでの注意
 
-`nfs`modeで使うlocal homeはinstall前に作成しておく。PixiEdenは自動作成しない。`install`は存在、owner、書込み権限、account homeとの分離、local filesystem条件を検証するだけである。
+interactiveな`nfs`installでは、選択したlocal homeが未作成なら、明示確認後にPixiEdenがdeployment前に作成し、その後に存在、owner、書込み権限、account homeとの分離、local filesystem条件をvalidationする。`--yes`または`curl | bash`のようなnon-TTY installではpromptも作成も行わず、install前の作成が必要である。reinstallでは作成確認より前に保存済みidentityを検証する。
 
 NFS modeではhome直下の8ファイル(`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`)だけをaccount homeとlocal homeの間で同期する。account homeを正として扱い、`pixied shell`または`pixied run`の起動時に`account→local`の一方向でlocal homeへコピーする。終了時にaccount homeへ書き戻さない。
 
@@ -100,8 +107,6 @@ NFS modeではhome直下の8ファイル(`.bashrc`、`.bash_profile`、`.profile
 ```bash
 pixied uninstall
 ```
-
-最後に、追加したshell設定(`~/.bashrc`など)からPixiEdenのhookブロックを手動で削除する。
 
 ## 動作要件
 
