@@ -123,11 +123,15 @@ runtime hookはstateとartifactを検証して環境変数とPATHを設定し、
 配布物の入力は`install-local.sh`、`bin/`、`lib/`、README、`docs/`であり、`scripts/package-release.sh`が`pixied.tar.gz`へまとめる。remote入口の`install.sh`はRelease archiveを取得し、archive内の`install-local.sh`へ処理を委譲する。
 
 ```bash
+# テストが成功するか確認する
 tests/run.sh
-scripts/package-release.sh
-tar -tzf dist/pixied.tar.gz
-scripts/tag-release.sh
-git push origin v0.1.0
+
+# bin/pixiedにあるPIXIED_VERSIONのバージョンアップ
+# 変更をコミットしてからタグを作成する
+
+# タグを作成してリモートへpushする
+# GitHub Actionsでrelease workflowがトリガーされてRelease archiveが作成される
+scripts/tag-release.sh --push
 ```
 
 タグ名は`bin/pixied`の`PIXIED_VERSION`から`v<version>`として導出する。`v*`タグへのpushで[release workflow](../.github/workflows/release.yml)がarchiveを作成し、GitHub Releaseへ`pixied.tar.gz`を公開する。
