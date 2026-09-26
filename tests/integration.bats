@@ -2364,6 +2364,44 @@ CURL
         pixied_test_fail "data remains when the Zellij session list failed"
 }
 
+@test "uninstall explains and can force through a missing Zellij path" {
+    local home="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-home"
+    local data="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-data"
+    local config="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-config"
+    local state="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-state"
+    local state_file="$state/pixied/machines/phase6-missing-zellij-path/state"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-missing-zellij-path \
+        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    sed -i '/^zellij_path=/d' "$state_file"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-missing-zellij-path \
+        bash "$data/pixied/bin/pixied" uninstall --yes
+    assert_failure 1
+    assert_output --partial 'cannot verify whether the managed Zellij session is active'
+    assert_output --partial 'uninstall state is missing Zellij path'
+    assert_output --partial 'zellij list-sessions --no-formatting'
+    assert_output --partial 'zellij delete-session pixied'
+    assert_output --partial 'pixied uninstall --force'
+    [ -f "$state_file" ] || pixied_test_fail "state was removed without --force"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-missing-zellij-path \
+        bash "$data/pixied/bin/pixied" uninstall --yes --force
+    assert_success
+    assert_output --partial 'uninstalling with --force without checking the managed Zellij session'
+    assert_output --partial 'uninstall state is missing Zellij path'
+    assert_output --partial 'zellij delete-session pixied'
+    [ ! -e "$state_file" ] || pixied_test_fail "state remains after forced uninstall"
+    [ ! -e "$data/pixied" ] || pixied_test_fail "data remains after forced uninstall"
+}
+
 @test "concurrent runtime: run and shell leases coexist" {
     local home="$PIXIED_TEST_ROOT/lease-coexist-home"
     local data="$PIXIED_TEST_ROOT/lease-coexist-data"
