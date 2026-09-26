@@ -128,6 +128,25 @@ pixied_state_set() {
     PIXIED_STATE["$key"]=$value
 }
 
+# @description Validate a value for a removed state key kept for compatibility.
+# The legacy key is validated like the path keys used by the current schema but
+# is not stored in PIXIED_STATE.
+#
+# @arg $1 string The legacy state key
+# @arg $2 string The value to validate
+# @exitcode 0 When the legacy value is valid
+# @exitcode 1 When the key is not a supported legacy key
+pixied_state_validate_legacy_value() {
+    local key=$1 value=${2-}
+    case "$key" in
+    sync_baseline)
+        [ -n "$value" ] || pixied_die "state path is empty: $key"
+        pixied_validate_canonical_path "$value" >/dev/null
+        ;;
+    *) return 1 ;;
+    esac
+}
+
 # @description Check whether the given state key exists in PIXIED_STATE.
 # @arg $1 string The state key
 # @exitcode 0 When the key exists
@@ -343,6 +362,42 @@ pixied_state_require_lock() {
     pixied_validate_owned_path "$canonical_lock"
 }
 
+# @description Parse a state file into PIXIED_STATE.
+# Checks the format, known keys, and duplicates of each line. The removed
+# sync_baseline key is validated for compatibility and intentionally discarded.
+#
+# @arg $1 string The state file path
+# @arg $2 string The label used in malformed-line errors
+# @set PIXIED_STATE assoc The parsed state
+# @exitcode 0 When all state lines are parsed successfully
+# @exitcode 1 When parsing or validation fails
+pixied_state_load_file() {
+    local state_file=$1 error_label=${2:-state} line key value
+    local sync_baseline_seen=0
+    pixied_state_reset
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || pixied_die "malformed $error_label line"
+        case "$line" in
+        *=*) ;;
+        *) pixied_die "malformed $error_label line" ;;
+        esac
+        key=${line%%=*}
+        value=${line#*=}
+        case "$key" in
+        sync_baseline)
+            [ "$sync_baseline_seen" -eq 0 ] || pixied_die "duplicate state key: $key"
+            pixied_state_validate_legacy_value "$key" "$value"
+            sync_baseline_seen=1
+            ;;
+        *)
+            pixied_state_known_key "$key" || pixied_die "unknown state key: $key"
+            pixied_state_has "$key" && pixied_die "duplicate state key: $key"
+            pixied_state_set "$key" "$value"
+            ;;
+        esac
+    done <"$state_file"
+}
+
 # @description Load the state file into PIXIED_STATE and validate it.
 # Checks the format, known keys, and duplicates of each line, then validates the result.
 #
@@ -353,25 +408,11 @@ pixied_state_require_lock() {
 # @see pixied_validate_owned_path
 # @see pixied_state_validate
 pixied_state_load() {
-    local state_file=${1:-${PIXIED_STATE_FILE:-}} line key value
+    local state_file=${1:-${PIXIED_STATE_FILE:-}}
     [ -n "$state_file" ] || pixied_die "state file path is not set"
     pixied_validate_owned_path "$state_file"
     [ -f "$state_file" ] || pixied_die "state is not a regular file: $state_file"
-    pixied_state_reset
-    while IFS= read -r line || [ -n "$line" ]; do
-        [ -n "$line" ] || pixied_die "malformed state line"
-        case "$line" in
-        *=*) ;;
-        *) pixied_die "malformed state line" ;;
-        esac
-        key=${line%%=*}
-        value=${line#*=}
-        if ! pixied_state_known_key "$key"; then
-            pixied_die "unknown state key: $key"
-        fi
-        pixied_state_has "$key" && pixied_die "duplicate state key: $key"
-        pixied_state_set "$key" "$value"
-    done <"$state_file"
+    pixied_state_load_file "$state_file" state
     pixied_state_validate
 }
 
@@ -385,25 +426,11 @@ pixied_state_load() {
 # @exitcode 0 When load or structural validation succeeds.
 # @exitcode 1 When load or validation fails.
 pixied_state_load_external() {
-    local state_file=${1:-} line key value
+    local state_file=${1:-}
     [ -n "$state_file" ] || pixied_die "external state file path is not set"
     pixied_validate_owned_path "$state_file"
     [ -f "$state_file" ] || pixied_die "external state is not a regular file: $state_file"
-    pixied_state_reset
-    while IFS= read -r line || [ -n "$line" ]; do
-        [ -n "$line" ] || pixied_die "malformed external state line"
-        case "$line" in
-        *=*) ;;
-        *) pixied_die "malformed external state line" ;;
-        esac
-        key=${line%%=*}
-        value=${line#*=}
-        if ! pixied_state_known_key "$key"; then
-            pixied_die "unknown state key: $key"
-        fi
-        pixied_state_has "$key" && pixied_die "duplicate state key: $key"
-        pixied_state_set "$key" "$value"
-    done <"$state_file"
+    pixied_state_load_file "$state_file" 'external state'
     pixied_state_validate_structure
 }
 

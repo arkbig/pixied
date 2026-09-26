@@ -2425,6 +2425,79 @@ CURL
     [ ! -e "$data_two/pixied/bin/pixi" ] || pixied_test_fail "new data path was used"
 }
 
+@test "reinstall migrates legacy sync baseline state" {
+    local home="$PIXIED_TEST_ROOT/phase2-legacy-sync-home"
+    local data="$PIXIED_TEST_ROOT/phase2-legacy-sync-data"
+    local config="$PIXIED_TEST_ROOT/phase2-legacy-sync-config"
+    local state="$PIXIED_TEST_ROOT/phase2-legacy-sync-state"
+    local state_file="$state/pixied/machines/phase2-legacy-sync/state"
+    local sync_baseline="$state/pixied/sync-baseline"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-legacy-sync PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_success
+    [ -f "$state_file" ] || pixied_test_fail "initial state file is missing"
+
+    printf 'sync_baseline=%s\n' "$sync_baseline" >>"$state_file"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-legacy-sync PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_success
+    if grep -Fq -- 'sync_baseline=' "$state_file"; then
+        pixied_test_fail "legacy sync baseline remained in rewritten state"
+    fi
+}
+
+@test "external state loader accepts legacy sync baseline state" {
+    local home="$PIXIED_TEST_ROOT/phase2-external-legacy-home"
+    local data="$PIXIED_TEST_ROOT/phase2-external-legacy-data"
+    local config="$PIXIED_TEST_ROOT/phase2-external-legacy-config"
+    local state="$PIXIED_TEST_ROOT/phase2-external-legacy-state"
+    local state_file="$state/pixied/machines/phase2-external-legacy/state"
+    local sync_baseline="$state/pixied/sync-baseline"
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-external-legacy PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
+    assert_success
+    printf 'sync_baseline=%s\n' "$sync_baseline" >>"$state_file"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_MACHINE_ID=phase2-external-legacy PIXIED_HOME_MODE=local \
+        bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        pixied_state_load_external "$2"
+        if pixied_state_has sync_baseline; then
+            printf "legacy key was retained\n"
+            exit 1
+        fi
+        serialized=$(pixied_state_serialize)
+        case "$serialized" in
+        *sync_baseline=*)
+            printf "legacy key was serialized\n"
+            exit 1
+            ;;
+        esac
+        printf "external state accepted\n"
+    ' bash "$PIXIED_REPO_ROOT" "$state_file"
+    assert_success
+    assert_output 'external state accepted'
+}
+
 @test "creation flags reflect pre-existing managed directories" {
     local home="$PIXIED_TEST_ROOT/phase2-created-home"
     local data="$PIXIED_TEST_ROOT/phase2-created-data"
@@ -3145,6 +3218,51 @@ CASES
     assert_output --partial 'unknown state key: removed_key'
 
     sed -i '/^removed_key=/d' "$state_file"
+    printf 'sync_baseline=relative/sync-baseline\n' >>"$state_file"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" XDG_BIN_HOME="$bin" PIXIED_HOME_MODE=local \
+        PIXIED_MACHINE_ID=phase1-reject bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        pixied_state_load
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_failure 2
+    assert_output --partial 'path must be absolute: relative/sync-baseline'
+
+    sed -i '/^sync_baseline=/d' "$state_file"
+    mkdir -p "$state/pixied/sync-baseline-target"
+    ln -s sync-baseline-target "$state/pixied/sync-baseline-link"
+    printf 'sync_baseline=%s\n' "$state/pixied/sync-baseline-link" >>"$state_file"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" XDG_BIN_HOME="$bin" PIXIED_HOME_MODE=local \
+        PIXIED_MACHINE_ID=phase1-reject bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        pixied_state_load
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_failure 2
+    assert_output --partial 'path is not canonical or contains a symlink'
+
+    sed -i '/^sync_baseline=/d' "$state_file"
+    printf 'sync_baseline=%s\n' "$state/pixied/sync-baseline" >>"$state_file"
+    printf 'sync_baseline=%s\n' "$state/pixied/sync-baseline" >>"$state_file"
+    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" XDG_BIN_HOME="$bin" PIXIED_HOME_MODE=local \
+        PIXIED_MACHINE_ID=phase1-reject bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        pixied_state_load
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_failure 1
+    assert_output --partial 'duplicate state key: sync_baseline'
+
+    sed -i '/^sync_baseline=/d' "$state_file"
     mv "$state_file" "$state_file.real"
     ln -s "$state_file.real" "$state_file"
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
@@ -3350,9 +3468,13 @@ pixied_assert_no_deploy_residue() {
 
 @test "active runtime: reinstall preserves account identity" {
     pixied_active_fixture ar-reinstall ar-reinstall
+    printf 'sync_baseline=%s\n' "$ah_state/pixied/sync-baseline" >>"$ah_state_file"
     run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes
     assert_success
     assert_output --partial 'Active runtime installation kept the verified identity intact'
+    if grep -Fq -- 'sync_baseline=' "$ah_state_file"; then
+        pixied_test_fail "legacy sync baseline remained after active reinstall"
+    fi
     grep -Fq -- "account_home=$ah_home" "$ah_state_file" ||
         pixied_test_fail "state account home changed during active reinstall"
     [ -f "$ah_config/pixied/runtime-hook.bash" ] ||
