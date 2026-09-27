@@ -25,6 +25,7 @@ PIXIED_UNINSTALL_SHARED_DATA=0
 PIXIED_UNINSTALL_SHARED_CONFIG=0
 PIXIED_UNINSTALL_SHARED_COMMAND=0
 PIXIED_UNINSTALL_SHARED_PIXI_HOME=0
+PIXIED_UNINSTALL_SHARED_RELEASE_CLEANUP=0
 PIXIED_UNINSTALL_QUARANTINE_COUNTER=0
 
 # @description Print the uninstall subcommand usage to standard output.
@@ -584,6 +585,78 @@ pixied_uninstall_prepare_targets() {
     pixied_uninstall_add_target "$PIXIED_STATE_FILE" "" file
 }
 
+# @description Reserve a last-machine NFS release-store cleanup.
+# Acquires the shared publish lock before confirmation and local removal, then
+# validates every release and rejects live release leases. The lock remains held
+# until the current machine's targets have been quarantined.
+#
+# @exitcode 0 When no shared cleanup is needed or the cleanup is reserved.
+# @exitcode 1 When the shared release store is unsafe or busy.
+pixied_uninstall_prepare_shared_release_cleanup() {
+    local release_store current_path current_present=0
+    PIXIED_UNINSTALL_SHARED_RELEASE_CLEANUP=0
+    [ "${PIXIED_STATE[home_mode]:-local}" = nfs ] || return 0
+    [ "${PIXIED_UNINSTALL_OTHER_STATE_COUNT:-0}" -eq 0 ] || return 0
+    release_store=$(pixied_release_store_dir)
+    if [ ! -e "$release_store" ] && [ ! -L "$release_store" ]; then
+        return 0
+    fi
+    if ! [ -d "$release_store" ] || [ -L "$release_store" ]; then
+        pixied_die "shared release store is unavailable: $release_store"
+    fi
+    pixied_release_publish_lock_acquire
+    current_path=$(pixied_release_current_path)
+    if [ -e "$current_path" ] || [ -L "$current_path" ]; then
+        pixied_release_current_read
+        current_present=1
+    fi
+    pixied_release_lease_sweep
+    if [ "${#PIXIED_RELEASE_LIVE_VERSIONS[@]}" -gt 0 ]; then
+        pixied_die 'cannot remove the shared release store while a release management lease is active'
+    fi
+    if [ "$current_present" -eq 1 ]; then
+        pixied_release_prune_collect 0
+    fi
+    pixied_release_validate_store_for_cleanup
+    PIXIED_UNINSTALL_SHARED_RELEASE_CLEANUP=1
+}
+
+# @description Remove the reserved shared NFS release store after local cleanup.
+# The running CLI has already loaded its libraries, so moving the store out of
+# the way before the final purge avoids executing from a path being recursively
+# deleted while preserving the quarantine safety boundary.
+#
+# @exitcode 0 When the shared store is quarantined and purged.
+# @exitcode 1 When the store cannot be safely removed.
+pixied_uninstall_cleanup_shared_release_store() {
+    local release_store quarantine
+    [ "${PIXIED_UNINSTALL_SHARED_RELEASE_CLEANUP:-0}" -eq 1 ] || return 0
+    release_store=$(pixied_release_store_dir)
+    if ! [ -d "$release_store" ] || [ -L "$release_store" ]; then
+        pixied_die "shared release store disappeared before cleanup: $release_store"
+    fi
+    pixied_validate_owned_path "$release_store"
+    [ -n "${PIXIED_RELEASE_LOCK_DIR:-}" ] ||
+        pixied_die 'shared release cleanup lock is missing'
+    pixied_release_require_publish_lock
+    quarantine=$(pixied_uninstall_quarantine_path "$release_store")
+    pixied_run mv -- "$release_store" "$quarantine"
+    if ! [ -d "$quarantine" ] || [ -L "$quarantine" ]; then
+        pixied_die 'shared release store quarantine is unavailable'
+    fi
+    pixied_validate_owned_path "$quarantine"
+    if ! [ -d "$quarantine/publish.lock" ] || [ -L "$quarantine/publish.lock" ]; then
+        pixied_die 'shared release store quarantine lost its publish lock'
+    fi
+    PIXIED_RELEASE_LOCK_DIR="$quarantine/publish.lock"
+    pixied_release_publish_lock_release
+    pixied_run rm -rf -- "$quarantine"
+    if [ -e "$quarantine" ] || [ -L "$quarantine" ]; then
+        pixied_die 'could not purge shared release store quarantine'
+    fi
+    PIXIED_UNINSTALL_SHARED_RELEASE_CLEANUP=0
+}
+
 # @description Validate every uninstall target immediately before any rename.
 # @exitcode 0 When all targets still match their state.
 # @exitcode 1 When a target changed or became unsafe.
@@ -857,6 +930,18 @@ pixied_launcher_nfs_dispatcher_content() {
     content="#!/usr/bin/env bash"$'\n'
     content+="set -Eeuo pipefail"$'\n'
     content+="state_root=$state_root_literal"$'\n'
+    content+='release_store="$state_root/release-store"'$'\n'
+    content+='fail() { printf "%s\n" "[pixied] ERROR $*" >&2; exit 1; }'$'\n'
+    content+='validate_path() {'$'\n'
+    content+='    local path=$1 owner mode'$'\n'
+    content+='    case "$path" in /*) ;; *) fail "managed path is not absolute: $path" ;; esac'$'\n'
+    content+='    [ "$(realpath -m -- "$path")" = "$path" ] || fail "managed path is not canonical: $path"'$'\n'
+    content+='    [ -e "$path" ] && [ ! -L "$path" ] || fail "managed path is missing or unsafe: $path"'$'\n'
+    content+='    owner=$(stat -c %u -- "$path")'$'\n'
+    content+='    [ "$owner" = "$(id -u)" ] || fail "managed path is not owned by the current user: $path"'$'\n'
+    content+='    mode=$(stat -c %a -- "$path")'$'\n'
+    content+='    [ $((8#$mode & 18)) -eq 0 ] || fail "managed path is writable by group or others: $path"'$'\n'
+    content+='}'$'\n'
     content+='machine_id=${PIXIED_MACHINE_ID:-}'$'\n'
     content+='if [ -z "$machine_id" ]; then'$'\n'
     content+='    if [ -r /etc/machine-id ]; then'$'\n'
@@ -867,28 +952,85 @@ pixied_launcher_nfs_dispatcher_content() {
     content+='    fi'$'\n'
     content+='fi'$'\n'
     content+='case "$machine_id" in'$'\n'
-    content+="'' | .* | *[!A-Za-z0-9._-]*) printf '%s\\n' '[pixied] ERROR invalid machine ID.' >&2; exit 1 ;;"$'\n'
+    content+="'' | .* | *[!A-Za-z0-9._-]*) fail 'invalid machine ID.' ;;"$'\n'
     content+='esac'$'\n'
     content+='state_file="$state_root/machines/$machine_id/state"'$'\n'
-    content+='[ -f "$state_file" ] || { printf "%s\\n" "[pixied] ERROR state is unavailable for this machine: $machine_id" >&2; exit 1; }'$'\n'
+    content+='load_state() {'$'\n'
+    content+='    [ -f "$state_file" ] && [ ! -L "$state_file" ] || fail "state is unavailable for this machine: $machine_id"'$'\n'
+    content+='    validate_path "$state_file"'$'\n'
+    content+='    state_machine_id=""'$'\n'
     content+='home_mode=""'$'\n'
     content+='command_bin=""'$'\n'
     content+='data_dir=""'$'\n'
     content+='while IFS="=" read -r state_key state_value; do'$'\n'
-    content+='    case "$state_key" in home_mode) home_mode=$state_value ;; command_bin) command_bin=$state_value ;; data_dir) data_dir=$state_value ;; esac'$'\n'
+    content+='    case "$state_key" in machine_id) state_machine_id=$state_value ;; home_mode) home_mode=$state_value ;; command_bin) command_bin=$state_value ;; data_dir) data_dir=$state_value ;; esac'$'\n'
     content+='done < "$state_file"'$'\n'
-    content+='case "$home_mode" in local | nfs) ;; *) printf "%s\\n" "[pixied] ERROR state home mode is invalid." >&2; exit 1 ;; esac'$'\n'
-    content+='case "$command_bin" in'$'\n'
-    content+='    /*) ;;'$'\n'
-    content+='    *) printf "%s\\n" "[pixied] ERROR state command directory is invalid." >&2; exit 1 ;;'$'\n'
+    content+='    [ "$state_machine_id" = "$machine_id" ] || fail "state machine ID does not match its directory"'$'\n'
+    content+='    case "$home_mode" in local | nfs) ;; *) fail "state home mode is invalid" ;; esac'$'\n'
+    content+='    validate_path "$command_bin"'$'\n'
+    content+='    validate_path "$data_dir"'$'\n'
+    content+='    [ -x "$data_dir/bin/pixied" ] || fail "local PixiEden CLI is unavailable: $data_dir/bin/pixied"'$'\n'
+    content+='}'$'\n'
+    content+='load_current() {'$'\n'
+    content+='    local current_path="$release_store/current" release_dir="" version="" manifest_hash="" line'$'\n'
+    content+='    validate_path "$release_store"'$'\n'
+    content+='    validate_path "$release_store/releases"'$'\n'
+    content+='    validate_path "$current_path"'$'\n'
+    content+='    while IFS= read -r line || [ -n "$line" ]; do'$'\n'
+    content+='        case "$line" in'$'\n'
+    content+='        version=*) [ -z "$version" ] || fail "current release pointer has duplicate version"; version=${line#*=} ;;'$'\n'
+    content+='        manifest_hash=*) [ -z "$manifest_hash" ] || fail "current release pointer has duplicate manifest hash"; manifest_hash=${line#*=} ;;'$'\n'
+    content+='        *) fail "current release pointer is malformed" ;;'$'\n'
+    content+='        esac'$'\n'
+    content+='    done < "$current_path"'$'\n'
+    content+='    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "current release version is invalid"'$'\n'
+    content+='    [[ "$manifest_hash" =~ ^[0-9a-f]{64}$ ]] || fail "current release manifest hash is invalid"'$'\n'
+    content+='    release_dir="$release_store/releases/$version"'$'\n'
+    content+='    [ "$(realpath -m -- "$release_dir")" = "$release_dir" ] || fail "current release path is not canonical"'$'\n'
+    content+='    case "$release_dir/" in "$release_store/releases/"*) ;; *) fail "current release escapes the release store" ;; esac'$'\n'
+    content+='    validate_path "$release_dir"'$'\n'
+    content+='    if ! ('$'\n'
+    content+='        . "$release_dir/lib/common.sh"'$'\n'
+    content+='        . "$release_dir/lib/paths.sh"'$'\n'
+    content+='        . "$release_dir/lib/state.sh"'$'\n'
+    content+='        . "$release_dir/lib/release.sh"'$'\n'
+    content+='        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state_root"'$'\n'
+    content+='        pixied_release_current_read >/dev/null'$'\n'
+    content+='    ); then'$'\n'
+    content+='        fail "shared current release validation failed"'$'\n'
+    content+='    fi'$'\n'
+    content+='    printf "%s" "$release_dir"'$'\n'
+    content+='}'$'\n'
+    content+='current_is_absent() {'$'\n'
+    content+='    local current_path="$release_store/current"'$'\n'
+    content+='    [ ! -e "$current_path" ] && [ ! -L "$current_path" ]'$'\n'
+    content+='}'$'\n'
+    content+='export PIXIED_STATE_DIR="$state_root" PIXIED_MACHINE_ID="$machine_id" PIXIED_HOME_MODE=nfs'$'\n'
+    content+='case "${1:-}" in'$'\n'
+    content+='install)'$'\n'
+    content+='    release_dir=$(load_current)'$'\n'
+    content+='    shift'$'\n'
+    content+='    exec "$release_dir/install-local.sh" "$@"'$'\n'
+    content+='    ;;'$'\n'
+    content+='uninstall)'$'\n'
+    content+='    if current_is_absent; then'$'\n'
+    content+='        load_state'$'\n'
+    content+='        export PIXIED_HOME_MODE="$home_mode" PIXIED_COMMAND_BIN="$command_bin"'$'\n'
+    content+='        exec "$data_dir/bin/pixied" "$@"'$'\n'
+    content+='    fi'$'\n'
+    content+='    release_dir=$(load_current)'$'\n'
+    content+='    exec "$release_dir/bin/pixied" "$@"'$'\n'
+    content+='    ;;'$'\n'
+    content+='prune | version | --version | help | -h | --help)'$'\n'
+    content+='    release_dir=$(load_current)'$'\n'
+    content+='    exec "$release_dir/bin/pixied" "$@"'$'\n'
+    content+='    ;;'$'\n'
+    content+='*)'$'\n'
+    content+='    load_state'$'\n'
+    content+='    export PIXIED_HOME_MODE="$home_mode" PIXIED_COMMAND_BIN="$command_bin"'$'\n'
+    content+='    exec "$data_dir/bin/pixied" "$@"'$'\n'
+    content+='    ;;'$'\n'
     content+='esac'$'\n'
-    content+='case "$data_dir" in'$'\n'
-    content+='    /*) ;;'$'\n'
-    content+='    *) printf "%s\\n" "[pixied] ERROR state data directory is invalid." >&2; exit 1 ;;'$'\n'
-    content+='esac'$'\n'
-    content+='[ -x "$data_dir/bin/pixied" ] || { printf "%s\\n" "[pixied] ERROR local PixiEden CLI is unavailable: $data_dir/bin/pixied" >&2; exit 1; }'$'\n'
-    content+='export PIXIED_STATE_DIR="$state_root" PIXIED_MACHINE_ID="$machine_id" PIXIED_HOME_MODE="$home_mode" PIXIED_COMMAND_BIN="$command_bin"'$'\n'
-    content+='exec "$data_dir/bin/pixied" "$@"'$'\n'
     printf '%s' "$content"
 }
 
@@ -1067,11 +1209,13 @@ pixied_uninstall_run() {
     pixied_uninstall_scan_other_states
     pixied_uninstall_restore_state
     pixied_uninstall_prepare_targets
+    pixied_uninstall_prepare_shared_release_cleanup
     pixied_uninstall_confirm || pixied_die "uninstall was not confirmed"
     pixied_uninstall_purge_stale_quarantines
     pixied_uninstall_require_no_active_session
     pixied_step "Removing the PixiEden installation for $PIXIED_MACHINE_ID"
     pixied_uninstall_quarantine_targets
+    pixied_uninstall_cleanup_shared_release_store
     pixied_success "PixiEden installation removed for $PIXIED_MACHINE_ID"
     if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
         pixied_info "The active runtime shell still holds the previous environment. Run 'exit' to leave this runtime shell, then restart or re-attach the runtime to use the account without PixiEden."

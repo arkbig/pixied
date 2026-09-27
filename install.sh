@@ -90,6 +90,27 @@ find_release_installer() {
     printf '%s\n' "$installer"
 }
 
+# @description Validate the packaged payload manifest after extraction.
+# The release library is loaded from the extracted archive so the archive's
+# allowlist and manifest rules are the same rules used by local publishing.
+#
+# @arg $1 string The extraction directory.
+# @exitcode 0 When the extracted release is complete and verified.
+# @exitcode 1 When the archive payload or manifest is invalid.
+verify_release_manifest() {
+    local extraction_dir=$1
+    local root="$extraction_dir/pixied"
+    [ -f "$root/lib/common.sh" ] || fail 'release archive is missing pixied/lib/common.sh'
+    [ -f "$root/lib/release.sh" ] || fail 'release archive is missing pixied/lib/release.sh'
+    if ! (
+        . "$root/lib/common.sh"
+        . "$root/lib/release.sh"
+        pixied_release_validate_tree "$root" "$root/release-manifest" archive
+    ); then
+        fail 'release archive manifest validation failed'
+    fi
+}
+
 # @description Remove the temporary release extraction directory.
 # @exitcode 0 Always.
 cleanup() {
@@ -123,6 +144,7 @@ main() {
     verify_release_checksum "$archive" "$checksum_file"
     tar -xzf "$archive" -C "$extraction_dir"
     installer=$(find_release_installer "$extraction_dir")
+    verify_release_manifest "$extraction_dir"
     bash "$installer" "$@"
 }
 

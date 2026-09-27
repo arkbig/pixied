@@ -20,6 +20,7 @@ flowchart LR
         uc06([UC-06 NFSホームで開発する])
         uc07([UC-07 環境をアンインストールする])
         uc08([UC-08 プロジェクト環境を生成する])
+        uc11([UC-11 NFS共有Releaseを更新・整理する])
     end
 
     user --> uc01
@@ -29,6 +30,7 @@ flowchart LR
     user --> uc06
     user --> uc07
     user --> uc08
+    user --> uc11
     bash --> uc03
 
     uc03 -.->|条件付き自動起動| uc05
@@ -48,6 +50,7 @@ flowchart LR
 | UC-06 | NFSホームで開発する | 利用者 | `pixied install --home-mode nfs` | [US-106](user-stories.ja.md#us-106) |
 | UC-07 | PixiEden環境を整理する | 利用者 | `pixied uninstall` | [US-107](user-stories.ja.md#us-107) |
 | UC-08 | プロジェクトPixi環境を生成する | 利用者 | `pixied generate <devcontainer\|dockerfile\|direnv>` | [US-108](user-stories.ja.md#us-108) |
+| UC-11 | NFS共有Releaseを更新・整理する | 利用者 | `pixied install`、`pixied version`、`pixied prune` | [US-110](user-stories.ja.md#us-110) |
 
 ## 通常フロー
 
@@ -107,7 +110,8 @@ NFSホームで開発する。
 
 1. 利用者が`pixied uninstall`を実行する。
 2. PixiEdenがstate、path、owner、hashを検証する。
-3. 現在のmachineが所有する資源を整理し、他machineが参照する共有資源は保持する。
+3. 現在のmachineが所有するlocal資源を整理し、他machineが参照するshared dispatcherとRelease storeは保持する。
+4. 最後のvalidなmachine stateを整理するときだけ、shared distributionの所有情報を検証して整理する。
 
 ### UC-08
 
@@ -135,3 +139,13 @@ NFSホームで開発する。
 2. PixiEdenがアクティブruntimeかつ検証済みstate fileをsource of truthとしてidentityを解決する（`$HOME`からは再計算しない）。
 3. `zellij`のアクティブruntimeの場合、専用sessionのdetachを求めて却下する。
 4. `none`のアクティブruntimeの場合、所有資源を整理してstateを更新する。現在のsessionが保持する環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。
+
+### UC-11
+
+NFS共有Releaseを更新・整理する。
+
+1. 利用者が一台で公開installerを実行し、checksumを検証したReleaseをshared state rootへpublishする。
+2. PixiEdenがimmutableなversioned Releaseを保存し、`current`をatomicに選択して、実行hostのlocal payloadを更新する。
+3. 別hostの利用者が`pixied version`を実行すると、shared Releaseとlocal payloadのversionを確認できる。
+4. 別hostの利用者が`pixied install`を実行すると、network downloadなしでshared`current`からlocal payloadを更新できる。version不一致中のruntime commandは自動更新せず、local payloadを続行する。
+5. 利用者が`pixied prune --keep N`を実行すると、`current`、保持数、liveなrelease leaseを保護したうえで、検証済みReleaseだけを整理する。

@@ -148,6 +148,29 @@ pixied_runtime_validate_state() {
     fi
 }
 
+# @description Warn once when the local NFS payload trails the shared release.
+# A missing or unreadable shared current release does not block the existing
+# local runtime and does not produce a misleading warning.
+#
+# @exitcode 0 Always.
+# @see pixied_release_current_read
+pixied_runtime_warn_version_mismatch() {
+    local current_version local_version
+    [ "${PIXIED_HOME_MODE:-local}" = nfs ] || return 0
+    [ "${PIXIED_VERSION_WARNING_EMITTED:-0}" -eq 0 ] || return 0
+    PIXIED_VERSION_WARNING_EMITTED=1
+    pixied_state_has payload_release_version || return 0
+    local_version=${PIXIED_STATE[payload_release_version]}
+    if ! current_version=$(
+        pixied_release_current_read >/dev/null
+        printf '%s' "$PIXIED_RELEASE_CURRENT_VERSION"
+    ) 2>/dev/null; then
+        return 0
+    fi
+    [ "$local_version" != "$current_version" ] || return 0
+    pixied_warn "local payload $local_version differs from shared release $current_version; run \`pixied install\`"
+}
+
 # @description Load and validate the current machine's runtime state.
 # A generated hook supplies an exact state path so runtime HOME changes never
 # cause account-side paths to be recalculated.
@@ -316,6 +339,7 @@ pixied_runtime_run_child() {
 # @see pixied_lease_acquire
 pixied_runtime_prepare() {
     pixied_runtime_load_state
+    pixied_runtime_warn_version_mismatch
     pixied_ensure_local_home_bin
     pixied_runtime_export_environment
     pixied_sync_reconcile_guarded

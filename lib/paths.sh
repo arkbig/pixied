@@ -260,6 +260,7 @@ pixied_machine_id() {
 # @set PIXIED_MACHINE_STATE_DIR string The per-machine state directory
 # @set PIXIED_STATE_FILE string The state file path
 # @set PIXIED_PIXI_HOME string The pixi home directory
+# @set PIXIED_RELEASE_STORE_DIR string The internal NFS release store directory
 # @exitcode 0 On success
 # @exitcode 1 When path resolution fails
 # @see pixied_detect_home_mode
@@ -291,6 +292,12 @@ pixied_resolve_paths() {
         export PIXIED_CONFIG_DIR=$config_dir
         export PIXIED_STATE_DIR=$state_dir
         export PIXIED_COMMAND_BIN=$command_bin
+        if [ "$home_mode" = nfs ]; then
+            PIXIED_RELEASE_STORE_DIR=$(pixied_validate_canonical_path "$state_dir/release-store")
+            export PIXIED_RELEASE_STORE_DIR
+        else
+            unset PIXIED_RELEASE_STORE_DIR
+        fi
         export PIXIED_MACHINE_ID
         export PIXIED_MACHINE_STATE_DIR
         export PIXIED_STATE_FILE
@@ -360,12 +367,80 @@ pixied_resolve_paths() {
     fi
 
     if [ "$home_mode" = nfs ]; then
+        PIXIED_RELEASE_STORE_DIR=$(pixied_validate_canonical_path "$state_dir/release-store")
+        export PIXIED_RELEASE_STORE_DIR
         export PIXIED_PIXI_HOME="${PIXIED_PIXI_HOME:-$local_home/.local/share/pixied/pixi}"
     else
+        unset PIXIED_RELEASE_STORE_DIR
         export PIXIED_PIXI_HOME="${PIXIED_PIXI_HOME:-$data_dir/pixi}"
     fi
     PIXIED_PIXI_HOME=$(pixied_validate_canonical_path "$PIXIED_PIXI_HOME")
     export PIXIED_PIXI_HOME
+}
+
+# @description Validate a release version and print the result.
+# Release versions intentionally use the same stable SemVer shape as
+# PIXIED_VERSION so they are safe path components and state values.
+#
+# @arg $1 string The release version.
+# @stdout The validated release version.
+# @exitcode 0 When the version is valid.
+# @exitcode 2 When the version is unsafe.
+pixied_release_version_validate() {
+    local version=${1:-}
+    [[ "$version" =~ $PIXIED_SAFE_VERSION_PATTERN ]] ||
+        pixied_path_fail "invalid release version: $version" "$PIXIED_EXIT_USAGE"
+    printf '%s' "$version"
+}
+
+# @description Return the internal NFS release store directory.
+# The store is always derived from the resolved shared state directory; it
+# cannot be redirected through an environment override or used in local mode.
+#
+# @stdout The canonical release store directory.
+# @exitcode 0 In NFS mode.
+# @exitcode 2 In local mode or when the path is unavailable.
+pixied_release_store_dir() {
+    [ "${PIXIED_HOME_MODE:-local}" = nfs ] ||
+        pixied_path_fail "release store is available only in NFS mode" "$PIXIED_EXIT_USAGE"
+    local state_dir=${PIXIED_STATE_DIR:-}
+    [ -n "$state_dir" ] || pixied_path_fail "state directory is not set"
+    pixied_validate_canonical_path "$state_dir/release-store"
+}
+
+# @description Return the canonical path of a versioned release directory.
+#
+# @arg $1 string The release version.
+# @stdout The release directory path.
+# @exitcode 0 When the version and path are valid.
+# @exitcode 2 When the version or path is invalid.
+pixied_release_version_dir() {
+    local version
+    version=$(pixied_release_version_validate "${1:-}")
+    printf '%s/releases/%s' "$(pixied_release_store_dir)" "$version"
+}
+
+# @description Return the regular-file path used to select the current release.
+# @stdout The current release pointer path.
+# @exitcode 0 In NFS mode.
+pixied_release_current_path() {
+    printf '%s/current' "$(pixied_release_store_dir)"
+}
+
+# @description Return the shared release publish lock path.
+# @stdout The publish lock path.
+# @exitcode 0 In NFS mode.
+pixied_release_publish_lock_path() {
+    printf '%s/publish.lock' "$(pixied_release_store_dir)"
+}
+
+# @description Return the directory containing leases for a release version.
+# @arg $1 string The release version.
+# @stdout The version-specific lease directory path.
+# @exitcode 0 When the version and path are valid.
+pixied_release_lease_dir() {
+    printf '%s/leases/%s' "$(pixied_release_store_dir)" \
+        "$(pixied_release_version_validate "${1:-}")"
 }
 
 # @description Ensure the local runtime home's ~/.local/bin directory exists.

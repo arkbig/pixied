@@ -138,7 +138,7 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 
 1. **Given**利用者が`nfs` modeと有効なmachine-local homeを選択している
    **When**installを実行する
-   **Then**runtimeのdata、config、専用`PIXI_HOME`、短時間lockとleaseがmachine-local領域に配置され、state registryとshared dispatcherはaccount側に配置される。
+   **Then**runtimeのdata、config、専用`PIXI_HOME`、短時間lock、lease、local payloadがmachine-local領域に配置され、state registry、stable dispatcher、shared Release storeはaccount側に配置される。
 2. **Given**NFS modeでUC-04またはUC-05を開始する
    **When**runtimeを開始する
    **Then**`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけが`account→local`の一方向`reconcile`で同期される。
@@ -148,6 +148,12 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 4. **Given**account側とlocal側の双方に異なる変更がある
    **When**同期を実行する
    **Then**片側を黙って上書きせず、利用者が確認できる状態を保つ。
+5. **Given**別hostが新しいshared`current`を選択している
+   **When**current machineで`pixied version`、`pixied shell`、`pixied run`を実行する
+   **Then**shared/localの不一致を表示または標準エラーへ一度だけ通知し、network downloadや自動payload更新をせずlocal payloadを使う。
+6. **Given**shared`current`が検証可能でcurrent machineのlocal homeが準備済みである
+   **When**current machineで`pixied install`を実行する
+   **Then**shared Releaseをnetworkから再取得せずlocal payloadを更新し、Release versionとmanifest hashをstateへ記録する。
 
 ## US-107
 
@@ -175,6 +181,12 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 4. **Given**uninstallが中断または一部完了している
    **When**uninstallを再実行する
    **Then**管理対象外へ範囲を広げず、残ったstateと所有情報に基づいて処理を続行できる。
+5. **Given**NFSのvalidなpeer stateが残っている
+   **When**current machineをuninstallする
+   **Then**stable dispatcher、shared`current`、Release storeを保持し、current machineのlocal payload、Pixi home、stateだけを整理する。
+6. **Given**最後のvalidなNFS machine stateをuninstallする
+   **When**shared distributionを整理する
+   **Then**publish lock、owner、canonical path、manifest、live leaseを検証し、未管理または所有外のentryを削除せずに停止する。
 
 ## US-108
 
@@ -238,3 +250,33 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
 6. **Given**アクティブruntime shellでinstall/uninstallを実行した
    **When**stateが更新されたあと`exit`でruntime shellを抜け、runtimeを再起動または再attachする
    **Then**現在のsessionが保持していた環境は変えず、再評価したruntimeにのみ新しい設定が反映される。
+
+## US-110
+
+### NFS共有Releaseをpublishしてhost-local payloadを更新する
+
+### User Story
+
+NFS共有ホームを使う開発者として、一台で検証した公開Releaseを共有し、各hostのlocal runtimeをnetwork downloadなしで同じversionへ更新したい。
+
+**関連UC**: [UC-06](use-cases.ja.md#uc-06)、[UC-11](use-cases.ja.md#uc-11)
+
+**関連ADR**: [ADR-010](adr.ja.md#adr-010)、[ADR-012](adr.ja.md#adr-012)
+
+### Acceptance Criteria
+
+1. **Given**公開Release archiveとそのchecksumがある
+   **When**一台でNFS installを実行する
+   **Then**archive、allowlist、manifestを検証してimmutableなversioned Releaseをpublishし、`current`をatomicに選択して実行hostのlocal payloadも更新する。
+2. **Given**shared`current`が選択済みで別hostのlocal homeが準備済みである
+   **When**別hostで`pixied install`を実行する
+   **Then**network downloadなしでshared`current`を検証してlocal payloadへdeployし、stateへpayload versionとmanifest hashを記録する。
+3. **Given**shared Releaseとcurrent machineのlocal payloadが異なる
+   **When**`pixied version`、`pixied shell`、`pixied run`を実行する
+   **Then**shared/localの状態を表示または警告し、local payloadを実行する。runtime commandは自動installしない。
+4. **Given**複数versionのshared Releaseがあり、live leaseを持つReleaseがある
+   **When**`pixied prune --keep 0 --yes`を実行する
+   **Then**`current`とlive leaseのReleaseを保持し、manifestとownerを再検証した他のReleaseだけをquarantine経由で整理する。
+5. **Given**package scriptでRelease archiveを作成する
+   **When**remote installerがarchiveを展開する
+   **Then**`install-local.sh`、`bin/pixied`、全`lib/*.sh`、README、docs、release manifestを含み、checksumとmanifest検証後にだけinstallを開始する。

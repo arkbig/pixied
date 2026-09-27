@@ -10,7 +10,7 @@ PRD (purpose and background)
 ```
 
 | Layer | Document | Responsibility |
-|---|---|---|
+| --- | --- | --- |
 | PRD | [prd.ja.md](prd.ja.md) | Purpose, background, users, scope, and success definition |
 | UC | [use-cases.ja.md](use-cases.ja.md) | Actors, system boundary, goals, and normal flows |
 | US/AC | [user-stories.ja.md](user-stories.ja.md) | User value and acceptance conditions |
@@ -57,6 +57,16 @@ With `--yes`, or when either standard input or output is not a TTY such as `curl
 
 For an existing state, reinstall identity and active-runtime constraints are checked before preflight. Creation confirmation can only target the local home recorded by the validated state.
 
+## NFS Release lifecycle
+
+NFS distribution and host runtime are separate. A public Release install verifies an archive, publishes an immutable version under the shared state root, atomically selects `current`, and deploys the same verified source to the initiating machine's local payload. The stable account-side dispatcher uses the selected Release for management commands such as `install`, `version`, `prune`, and `uninstall`.
+
+Runtime commands use the current machine's local payload, Pixi home, cache, and session resources. They never source the shared Release tree. This lets a host continue running its verified local payload while another host publishes a newer `current` Release.
+
+On another host, `pixied install` resolves and validates the shared `current` Release and deploys it locally without downloading an archive. `pixied version` reports both the shared Release and local payload. A mismatch, legacy state without release metadata, or an uninstalled host is informational; runtime commands continue with the local payload and do not update it automatically.
+
+`pixied prune --keep N` takes the shared release lock, protects `current`, retained history, and live release leases, and removes only revalidated immutable Releases through quarantine. It is an NFS-only management command and never targets local payloads, state, Pixi homes, or caches. An NFS uninstall preserves the shared dispatcher and Release store while another valid machine state exists; only the last valid machine may remove the validated shared distribution.
+
 ## Environment variables
 
 Supported user-facing install settings are `PIXIED_HOME_MODE`, `PIXIED_LOCAL_HOME`, and `PIXIED_SESSION_MANAGER`. `PIXIED_AUTO_ATTACH` controls runtime shell attachment. `PIXIED_MACHINE_ID` identifies machine state. Release configuration uses `PIXIED_RELEASE_URL`.
@@ -66,7 +76,7 @@ Resolved paths such as `PIXIED_DATA_DIR`, `PIXIED_CONFIG_DIR`, and `PIXIED_STATE
 ## Responsibility boundaries
 
 | Path | Responsibility |
-|---|---|
+| --- | --- |
 | `bin/pixied` | CLI dispatch and install, runtime, and uninstall ordering |
 | `lib/paths.sh` | Home, local-home, XDG, machine-ID, and dedicated Pixi path resolution and validation |
 | `lib/options.sh` | CLI, environment, state, auto-detection, defaults, wizard, and preflight |
@@ -78,6 +88,17 @@ Resolved paths such as `PIXIED_DATA_DIR`, `PIXIED_CONFIG_DIR`, and `PIXIED_STATE
 | `lib/uninstall.sh` | Ownership validation, quarantine, and cleanup |
 | `lib/generate.sh` | Project integration file generation |
 
-## Release verification
+## Release archive verification
 
 The release archive is built from `install-local.sh`, `bin/`, `lib/`, README files, and `docs/`. `install.sh` downloads and verifies the archive, then delegates to the archive's `install-local.sh`.
+
+Build and inspect the archive before a release:
+
+```bash
+archive=/tmp/pixied.tar.gz
+bash scripts/package-release.sh "$archive"
+(cd /tmp && sha256sum -c pixied.tar.gz.sha256)
+tar -tzf "$archive" | rg 'pixied/(bin/pixied|install-local.sh|lib/release.sh|release-manifest)$'
+```
+
+The package script derives the payload allowlist and manifest from the release library. The remote installer verifies the checksum and the extracted manifest before running `install-local.sh`, so checkout-only files are not part of the deployable archive.

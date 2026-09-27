@@ -29,6 +29,8 @@ readonly PIXIED_ROOT
 . "$PIXIED_ROOT/lib/paths.sh"
 # shellcheck source=lib/state.sh
 . "$PIXIED_ROOT/lib/state.sh"
+# shellcheck source=lib/release.sh
+. "$PIXIED_ROOT/lib/release.sh"
 # shellcheck source=lib/lease.sh
 . "$PIXIED_ROOT/lib/lease.sh"
 # shellcheck source=lib/options.sh
@@ -62,12 +64,292 @@ Commands:
     generate <format> [options] Generate a project integration file.
                            Formats: direnv, devcontainer, dockerfile.
     uninstall [options]    Remove the PixiEden installation.
+    prune [options]        Remove unused shared NFS releases.
     help                   Show this help.
     version                Print the PixiEden version.
 
 Run `pixied <command> --help` for command options.
 Runtime activation uses the dedicated Pixi environment and starts an isolated child process.
 USAGE
+}
+
+# @description Print the prune subcommand usage.
+# @stdout The prune command help message.
+pixied_prune_usage() {
+    cat <<'USAGE'
+Usage: pixied prune [OPTIONS]
+
+Remove unused shared NFS releases after validation.
+
+Options:
+    --keep N       Keep the newest N non-current releases (default: 1).
+    --yes          Skip the destructive confirmation prompt.
+    --help         Show this help.
+
+The current release and releases with live management leases are always kept.
+USAGE
+}
+
+# @description Confirm the destructive prune operation.
+# @exitcode 0 When approved.
+# @exitcode 1 When confirmation is unavailable or declined.
+pixied_prune_confirm() {
+    local answer
+    if ! [ -t 0 ] || ! [ -t 1 ]; then
+        pixied_warn 'prune requires an interactive confirmation or --yes'
+        return 1
+    fi
+    printf '%sRemove the listed shared releases? [y/N] %s' \
+        "$PIXIED_COLOR_YELLOW" "$PIXIED_COLOR_RESET" >&2
+    if ! IFS= read -r answer; then
+        pixied_warn 'prune was declined'
+        return 1
+    fi
+    case "$answer" in
+    [yY] | [yY][eE][sS]) return 0 ;;
+    *)
+        pixied_warn 'prune was declined'
+        return 1
+        ;;
+    esac
+}
+
+# @description Remove unneeded immutable releases from the shared NFS store.
+# The publish lock covers candidate calculation, confirmation, and deletion;
+# each candidate is revalidated and moved to a same-filesystem quarantine.
+#
+# @arg $@ string Prune options.
+# @exitcode 0 When pruning succeeds or has no candidates.
+# @exitcode 1 When confirmation or release cleanup fails.
+# @exitcode 2 When an option or home mode is invalid.
+pixied_prune() {
+    local keep=1 assume_yes=0 option value version candidate_count
+    while [ "$#" -gt 0 ]; do
+        option=$1
+        case "$option" in
+        --help | -h)
+            [ "$#" -eq 1 ] || pixied_die '--help must be used alone' "$PIXIED_EXIT_USAGE"
+            pixied_prune_usage
+            return "$PIXIED_EXIT_OK"
+            ;;
+        --yes)
+            assume_yes=1
+            ;;
+        --keep)
+            [ "$#" -ge 2 ] || pixied_die 'missing value for --keep' "$PIXIED_EXIT_USAGE"
+            keep=$2
+            shift
+            ;;
+        --keep=*) keep=${option#*=} ;;
+        --*) pixied_die "unknown prune option: $option" "$PIXIED_EXIT_USAGE" ;;
+        *) pixied_die "unexpected prune argument: $option" "$PIXIED_EXIT_USAGE" ;;
+        esac
+        shift
+    done
+    case "$keep" in
+    '' | *[!0-9]*) pixied_die "invalid --keep value: $keep" "$PIXIED_EXIT_USAGE" ;;
+    esac
+    [ "${PIXIED_HOME_MODE:-local}" = nfs ] ||
+        pixied_die 'prune is available only in NFS mode' "$PIXIED_EXIT_USAGE"
+    pixied_version_ensure_nfs_state_dir ||
+        pixied_die 'could not resolve the shared NFS state directory'
+    pixied_release_store_prepare
+    pixied_release_publish_lock_acquire
+    pixied_release_current_read
+    pixied_release_lease_sweep
+    pixied_release_prune_collect "$keep"
+    candidate_count=${#PIXIED_RELEASE_PRUNE_CANDIDATES[@]}
+    if [ "$candidate_count" -eq 0 ]; then
+        printf 'No shared releases to prune.\n'
+        pixied_release_publish_lock_release
+        return "$PIXIED_EXIT_OK"
+    fi
+    printf 'Prune candidates:\n'
+    for version in "${PIXIED_RELEASE_PRUNE_CANDIDATES[@]}"; do
+        candidate=$(pixied_release_version_dir "$version")
+        printf '  %s (%s)\n' "$version" "$candidate"
+    done
+    if [ "$assume_yes" -eq 0 ] && ! pixied_prune_confirm; then
+        pixied_release_publish_lock_release
+        return "$PIXIED_EXIT_FAILURE"
+    fi
+    pixied_release_prune_delete
+    pixied_release_publish_lock_release
+    pixied_success "Pruned $candidate_count shared release(s)"
+}
+
+# @description Ensure the NFS state directory is available for information queries.
+# Does not create directories or require a local payload, so version remains a
+# read-only command on a machine that has not been installed yet.
+#
+# @exitcode 0 When the state directory is available.
+# @exitcode 1 When paths cannot be resolved safely.
+pixied_version_ensure_nfs_state_dir() {
+    local state_dir
+    [ "${PIXIED_HOME_MODE:-local}" = nfs ] || return 1
+    [ -n "${PIXIED_STATE_DIR:-}" ] && return 0
+    if state_dir=$(
+        pixied_resolve_paths 0
+        printf '%s' "$PIXIED_STATE_DIR"
+    ) 2>/dev/null; then
+        export PIXIED_STATE_DIR=$state_dir
+        return 0
+    fi
+    return 1
+}
+
+# @description Load the current machine's state without requiring runtime artifacts.
+# Invalid or missing state is reported through PIXIED_VERSION_STATE_STATUS so the
+# version command can remain informational and exit successfully.
+#
+# @set PIXIED_VERSION_STATE_STATUS string The state status.
+# @exitcode 0 Always after a safe inspection attempt.
+pixied_version_load_nfs_state() {
+    local state_file serialized key value
+    PIXIED_VERSION_STATE_STATUS=not-installed
+    pixied_state_reset
+    pixied_version_ensure_nfs_state_dir || {
+        PIXIED_VERSION_STATE_STATUS=unavailable
+        return 0
+    }
+    if [ -z "${PIXIED_MACHINE_ID:-}" ]; then
+        if ! PIXIED_MACHINE_ID=$(pixied_machine_id 2>/dev/null); then
+            PIXIED_VERSION_STATE_STATUS=unavailable
+            return 0
+        fi
+        export PIXIED_MACHINE_ID
+    fi
+    pixied_machine_id_is_safe "$PIXIED_MACHINE_ID" || {
+        PIXIED_VERSION_STATE_STATUS=unavailable
+        return 0
+    }
+    state_file="$PIXIED_STATE_DIR/machines/$PIXIED_MACHINE_ID/state"
+    if [ ! -e "$state_file" ] && [ ! -L "$state_file" ]; then
+        return 0
+    fi
+    PIXIED_VERSION_STATE_STATUS=unavailable
+    if serialized=$(
+        pixied_state_load_external "$state_file"
+        pixied_state_serialize
+    ) 2>/dev/null; then
+        pixied_state_reset
+        while IFS='=' read -r key value; do
+            [ -n "$key" ] || continue
+            pixied_state_set "$key" "$value"
+        done <<<"$serialized"
+        PIXIED_VERSION_STATE_STATUS=valid
+    fi
+}
+
+# @description Read the verified shared current release version for NFS status.
+# Missing or invalid current data is represented as unavailable and never makes
+# the informational version command fail.
+#
+# @set PIXIED_VERSION_SHARED_VERSION string The current shared release version.
+# @set PIXIED_VERSION_SHARED_STATUS string The shared release status.
+# @exitcode 0 Always after a safe inspection attempt.
+pixied_version_load_shared_release() {
+    local current_version
+    PIXIED_VERSION_SHARED_VERSION=""
+    PIXIED_VERSION_SHARED_STATUS=unavailable
+    pixied_version_ensure_nfs_state_dir || return 0
+    if current_version=$(
+        pixied_release_current_read >/dev/null
+        printf '%s' "$PIXIED_RELEASE_CURRENT_VERSION"
+    ) 2>/dev/null; then
+        PIXIED_VERSION_SHARED_VERSION=$current_version
+        PIXIED_VERSION_SHARED_STATUS=available
+    fi
+}
+
+# @description Resolve the installed payload version and state generation.
+# A state without release metadata is retained as a legacy installation.
+#
+# @set PIXIED_VERSION_LOCAL_VERSION string The local payload version.
+# @set PIXIED_VERSION_LOCAL_KIND string The payload state kind.
+# @exitcode 0 Always after inspecting the loaded state.
+pixied_version_load_local_payload() {
+    local cli_path version
+    PIXIED_VERSION_LOCAL_VERSION=""
+    PIXIED_VERSION_LOCAL_KIND=${PIXIED_VERSION_STATE_STATUS:-unavailable}
+    case "$PIXIED_VERSION_STATE_STATUS" in
+    valid)
+        if pixied_state_has payload_release_version; then
+            PIXIED_VERSION_LOCAL_VERSION=${PIXIED_STATE[payload_release_version]}
+            PIXIED_VERSION_LOCAL_KIND=managed
+        else
+            PIXIED_VERSION_LOCAL_KIND=legacy
+            cli_path="${PIXIED_STATE[data_dir]:-}/bin/pixied"
+            if [ -f "$cli_path" ] && [ ! -L "$cli_path" ]; then
+                version=$(sed -n \
+                    's/^PIXIED_VERSION="\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p' \
+                    "$cli_path" | head -n 1)
+                if [[ "$version" =~ $PIXIED_SAFE_VERSION_PATTERN ]]; then
+                    PIXIED_VERSION_LOCAL_VERSION=$version
+                fi
+            fi
+        fi
+        ;;
+    not-installed)
+        PIXIED_VERSION_LOCAL_KIND=not-installed
+        ;;
+    esac
+}
+
+# @description Print the CLI and NFS shared/local release status.
+# Local mode preserves the historical single-line version output. NFS mode is
+# informational and always exits successfully, including for missing state or
+# an unavailable shared current pointer.
+#
+# @exitcode 0 Always.
+pixied_version() {
+    local status
+    if [ "${PIXIED_HOME_MODE:-local}" != nfs ]; then
+        printf 'pixied %s\n' "$PIXIED_VERSION"
+        return "$PIXIED_EXIT_OK"
+    fi
+
+    pixied_version_load_nfs_state
+    pixied_version_load_shared_release
+    pixied_version_load_local_payload
+    printf 'pixied %s\n' "$PIXIED_VERSION"
+    if [ "$PIXIED_VERSION_SHARED_STATUS" = available ]; then
+        printf 'shared release: %s\n' "$PIXIED_VERSION_SHARED_VERSION"
+    else
+        printf 'shared release: unavailable\n'
+    fi
+    case "$PIXIED_VERSION_LOCAL_KIND" in
+    managed)
+        printf 'local payload: %s\n' "$PIXIED_VERSION_LOCAL_VERSION"
+        ;;
+    legacy)
+        if [ -n "$PIXIED_VERSION_LOCAL_VERSION" ]; then
+            printf 'local payload: %s (legacy state)\n' "$PIXIED_VERSION_LOCAL_VERSION"
+        else
+            printf 'local payload: unavailable (legacy state)\n'
+        fi
+        ;;
+    not-installed)
+        printf 'local payload: not installed\n'
+        ;;
+    *)
+        printf 'local payload: unavailable\n'
+        ;;
+    esac
+
+    if [ "$PIXIED_VERSION_SHARED_STATUS" != available ]; then
+        status='shared release unavailable'
+    elif [ "$PIXIED_VERSION_LOCAL_KIND" = managed ] &&
+        [ "$PIXIED_VERSION_LOCAL_VERSION" = "$PIXIED_VERSION_SHARED_VERSION" ]; then
+        status=current
+    elif [ "$PIXIED_VERSION_LOCAL_KIND" = managed ]; then
+        status='mismatch; run `pixied install`'
+    elif [ "$PIXIED_VERSION_LOCAL_KIND" = legacy ]; then
+        status='legacy state; run `pixied install`'
+    else
+        status='not installed; run `pixied install`'
+    fi
+    printf 'status: %s\n' "$status"
 }
 
 # @description Print the shell subcommand usage to standard output.
@@ -523,8 +805,12 @@ pixied_main() {
         shift
         pixied_uninstall "$@"
         ;;
+    prune)
+        shift
+        pixied_prune "$@"
+        ;;
     help | -h | --help) pixied_usage ;;
-    version | --version) printf 'pixied %s\n' "$PIXIED_VERSION" ;;
+    version | --version) pixied_version ;;
     *) pixied_die "unknown command: $command_name" "$PIXIED_EXIT_USAGE" ;;
     esac
 }

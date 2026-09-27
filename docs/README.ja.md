@@ -73,6 +73,16 @@ tests/run.sh all
 
 既存stateのreinstallでは、local homeの変更禁止とactive runtimeのidentity制約をpreflightより前に検証する。preflightの作成確認は、検証済みstateが示すlocal homeだけを対象にする。
 
+## NFS Releaseのライフサイクル
+
+NFSのdistributionとhostのruntimeは分離する。公開Releaseのinstallはarchiveを検証し、共有state rootの下へimmutableなversionをpublishし、`current`をatomicに選択し、同じ検証済みsourceを実行hostのlocal payloadへdeployする。account側のstable dispatcherは`install`、`version`、`prune`、`uninstall`などのmanagement commandを選択済みReleaseへ振り分ける。
+
+runtime commandはcurrent machineのlocal payload、Pixi home、cache、session resourceを使い、shared Release treeをsourceしない。そのため、別hostが新しい`current`をpublishしても、hostは検証済みのlocal payloadを使ってruntimeを継続できる。
+
+別hostの`pixied install`はshared`current`を解決・検証してlocalへdeployし、archiveをnetworkからdownloadしない。`pixied version`はshared Releaseとlocal payloadを両方表示する。不一致、Release metadataが無いlegacy state、未installは情報表示として扱い、runtime commandはlocal payloadを続行して自動更新しない。
+
+`pixied prune --keep N`はshared release lockを取得し、`current`、保持履歴、liveなrelease leaseを保護して、再検証済みのimmutable Releaseだけをquarantine経由で整理する。NFS専用のmanagement commandであり、local payload、state、Pixi home、cacheをtargetにしない。他のvalidなmachine stateがあるNFS uninstallではshared dispatcherとRelease storeを保持し、最後のvalid machineだけが検証済みshared distributionを整理できる。
+
 local homeの作成状態はNFS同期の有無とは別である。`nfs`modeでは、account homeとlocal homeの間でhome直下の`.bashrc`、`.bash_profile`、`.profile`、`.bash_logout`、`.zshrc`、`.zprofile`、`.zlogin`、`.zlogout`だけをallowlistに従って同期する。初期版にはlocal home作成用のサブコマンドを設けない。将来chezmoiを導入する場合のdotfiles所有権、NFS同期の廃止・代替・併用は、初期版とは別の設計判断と移行計画で扱う。
 
 ## 環境変数の分類
@@ -121,9 +131,20 @@ runtime hookはstateとartifactを検証して環境変数とPATHを設定し、
 
 実環境の検証は`tests/e2e/run-multipass.sh`へ集約する。使い捨てUbuntu VMへrelease archiveをinstallし、実Pixi、実direnv、実Zellij、PTY、同一machine上のsession再接続を検証する。
 
-## Release archiveの作成と公開
+## Release archiveの作成と検証
 
 配布物の入力は`install-local.sh`、`bin/`、`lib/`、README、`docs/`であり、`scripts/package-release.sh`が`pixied.tar.gz`へまとめる。remote入口の`install.sh`はRelease archiveを取得し、archive内の`install-local.sh`へ処理を委譲する。
+
+Release前にarchive、checksum、manifest、allowlistを確認する。
+
+```bash
+archive=/tmp/pixied.tar.gz
+bash scripts/package-release.sh "$archive"
+(cd /tmp && sha256sum -c pixied.tar.gz.sha256)
+tar -tzf "$archive" | rg 'pixied/(bin/pixied|install-local.sh|lib/release.sh|release-manifest)$'
+```
+
+package scriptはrelease libraryのpayload allowlistとmanifest生成を使う。remote installerはchecksumと展開後manifestを検証してからarchive内の`install-local.sh`を実行するため、checkout専用fileはdeployable archiveへ含まれない。
 
 ```bash
 # テストが成功するか確認する

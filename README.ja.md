@@ -69,6 +69,28 @@ curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh \
 bash /tmp/pixied-install.sh --home-mode nfs
 ```
 
+## NFS Releaseを更新する
+
+NFS共有ホームでは、最初に一台で公開Releaseをインストールする。そのhostがarchiveを検証し、immutableなshared Releaseをpublishして`current`を選択し、自分のmachine-local payloadも更新する。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh |
+  bash -s -- --home-mode nfs --local-home "/scratch/$USER" --yes
+```
+
+別hostでは、そのhost専用のlocal homeを作成して`pixied install`を実行する。選択済みshared Releaseを使うため、同じarchiveをnetworkから再取得しない。
+
+```bash
+mkdir -p /scratch/$USER
+pixied install --home-mode nfs --local-home "/scratch/$USER" --yes
+```
+
+そのhostで最初のinstallが済んだ後は、shared`current`が変わるたびに`pixied install`を実行する。`pixied version`はshared Releaseとこのhostのlocal payloadを表示する。不一致は情報表示だけであり、`pixied shell`と`pixied run`は検証済みのlocal payloadを使い続け、自動更新しない。hostを更新するには`pixied install`を実行する。
+
+`pixied prune --keep 1`で確認後に古い検証済みReleaseを整理できる。non-interactiveに実行する場合は`--yes`を付ける。選択中の`current`、保持数分の履歴、liveなmanagement commandが使っているReleaseは常に保護される。`prune`はNFS modeだけで使え、host-local payloadやPixi homeは削除しない。
+
+NFS hostを一台uninstallすると、そのhostのlocal payloadとmachine stateだけを削除し、validな別machineが残る間はshared dispatcherとRelease storeを保持する。最後のvalid machineをuninstallしたときだけshared distributionを整理する。
+
 ## コマンド
 
 ```text
@@ -79,6 +101,8 @@ pixied hook <bash|zsh>       シェル初期化コードを出力
 pixied install               環境をインストールまたは修復
 pixied uninstall             PixiEden管理対象を整理
 pixied generate <format>     プロジェクト連携ファイルを生成
+pixied prune [options]       古いshared NFS Releaseを整理
+pixied help                  ヘルプを表示
 pixied version               バージョン表示
 ```
 

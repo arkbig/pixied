@@ -104,6 +104,22 @@ pixied_fake_lease() {
     printf '%s' "$file"
 }
 
+# @description Create a minimal source tree with the repository release payload.
+# @arg $1 string Destination source tree.
+# @arg $2 string Release version to declare in bin/pixied.
+# @exitcode 0 When the source tree is created.
+pixied_make_release_source() {
+    local target=$1 version=$2
+    mkdir -p "$target/bin" "$target/lib"
+    cp "$PIXIED_REPO_ROOT/install-local.sh" "$target/install-local.sh"
+    cp "$PIXIED_REPO_ROOT/bin/pixied" "$target/bin/pixied"
+    cp "$PIXIED_REPO_ROOT"/lib/*.sh "$target/lib/"
+    sed -i "s/^PIXIED_VERSION=\"[^\"]*\"$/PIXIED_VERSION=\"$version\"/" \
+        "$target/bin/pixied"
+    chmod 0755 "$target/install-local.sh" "$target/bin/pixied"
+    chmod 0644 "$target/lib"/*.sh
+}
+
 # @description Assert that a version string follows semantic versioning.
 # @arg $1 string Version string without the command name.
 # @exitcode 0 When the version is valid.
@@ -184,6 +200,10 @@ assert_semver() {
     run bash "$cli" uninstall --help
     assert_success
     assert_output --partial 'Usage: pixied uninstall [--yes] [--force]'
+
+    run bash "$cli" prune --help
+    assert_success
+    assert_output --partial 'Usage: pixied prune [OPTIONS]'
 
     run bash "$cli" generate --help
     assert_success
@@ -556,6 +576,479 @@ PYPROJECT
         'cd -- "$1" && bash "$2" generate dockerfile --bogus' bash "$project" "$cli"
     assert_failure 2
     assert_output --partial 'Usage: pixied generate <direnv|devcontainer|dockerfile> [OPTIONS]'
+}
+
+@test "NFS release publish selects and reuses a verified current release" {
+    local source="$PIXIED_TEST_ROOT/release-publish-source"
+    local state="$PIXIED_TEST_ROOT/release-publish-state"
+    local home="$PIXIED_TEST_ROOT/release-publish-home"
+    local expected_hash
+    mkdir -p "$home"
+    pixied_make_release_source "$source" 1.2.3
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        source_root=$3
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        pixied_release_publish "$source_root"
+        release_dir=$(pixied_release_version_dir 1.2.3)
+        before=$(stat -c %i -- "$release_dir")
+        pixied_release_publish "$source_root"
+        after=$(stat -c %i -- "$release_dir")
+        pixied_release_current_read
+        [ "$before" = "$after" ]
+        printf "%s|%s|%s\n" "$PIXIED_RELEASE_CURRENT_VERSION" \
+            "$PIXIED_RELEASE_CURRENT_MANIFEST_HASH" "$PIXIED_RELEASE_CURRENT_DIR"
+    ' bash "$PIXIED_REPO_ROOT" "$state" "$source"
+    assert_success
+    expected_hash=$(sha256sum "$state/release-store/releases/1.2.3/release-manifest" | awk '{print $1}')
+    assert_equal "1.2.3|$expected_hash|$state/release-store/releases/1.2.3" "$output"
+}
+
+@test "NFS release publish rejects a same-version manifest mismatch" {
+    local source="$PIXIED_TEST_ROOT/release-mismatch-source"
+    local changed="$PIXIED_TEST_ROOT/release-mismatch-changed"
+    local state="$PIXIED_TEST_ROOT/release-mismatch-state"
+    local home="$PIXIED_TEST_ROOT/release-mismatch-home"
+    mkdir -p "$home"
+    pixied_make_release_source "$source" 1.2.3
+    pixied_make_release_source "$changed" 1.2.3
+    printf '\nchanged\n' >>"$changed/lib/common.sh"
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        source_root=$3
+        changed_root=$4
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        pixied_release_publish "$source_root"
+        pixied_release_publish "$changed_root"
+    ' bash "$PIXIED_REPO_ROOT" "$state" "$source" "$changed"
+    assert_failure 1
+    assert_output --partial 'different manifest'
+    assert_equal 'version=1.2.3' "$(sed -n '1p' "$state/release-store/current")"
+    [ -f "$state/release-store/releases/1.2.3/release-manifest" ] ||
+        pixied_test_fail 'the original release was removed after a manifest mismatch'
+}
+
+@test "NFS release publish keeps current when stage validation fails" {
+    local source="$PIXIED_TEST_ROOT/release-stage-source"
+    local broken="$PIXIED_TEST_ROOT/release-stage-broken"
+    local state="$PIXIED_TEST_ROOT/release-stage-state"
+    local home="$PIXIED_TEST_ROOT/release-stage-home"
+    mkdir -p "$home"
+    pixied_make_release_source "$source" 1.2.3
+    pixied_make_release_source "$broken" 1.2.4
+    rm "$broken/lib/common.sh"
+    ln -s "$source/lib/common.sh" "$broken/lib/common.sh"
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        source_root=$3
+        broken_root=$4
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        pixied_release_publish "$source_root"
+        pixied_release_publish "$broken_root"
+    ' bash "$PIXIED_REPO_ROOT" "$state" "$source" "$broken"
+    assert_failure 1
+    assert_output --partial 'not a regular file: lib/common.sh'
+    assert_equal 'version=1.2.3' "$(sed -n '1p' "$state/release-store/current")"
+}
+
+@test "NFS current resolver rejects pointer and manifest corruption" {
+    local source="$PIXIED_TEST_ROOT/release-corrupt-source"
+    local state="$PIXIED_TEST_ROOT/release-corrupt-state"
+    local home="$PIXIED_TEST_ROOT/release-corrupt-home"
+    local pointer
+    mkdir -p "$home"
+    pixied_make_release_source "$source" 1.2.3
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        source_root=$3
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        pixied_release_publish "$source_root"
+    ' bash "$PIXIED_REPO_ROOT" "$state" "$source"
+    assert_success
+
+    pointer=$(<"$state/release-store/current")
+    printf 'not-a-current-pointer\n' >"$state/release-store/current"
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        pixied_release_current_read
+    ' bash "$PIXIED_REPO_ROOT" "$state"
+    assert_failure 1
+    assert_output --partial 'malformed current release pointer'
+
+    printf '%s\n' "$pointer" >"$state/release-store/current"
+    printf 'tampered\n' >>"$state/release-store/releases/1.2.3/release-manifest"
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        pixied_release_current_read
+    ' bash "$PIXIED_REPO_ROOT" "$state"
+    assert_failure 1
+    assert_output --partial 'manifest does not match payload'
+}
+
+@test "NFS release publish rejects a competing publish lock" {
+    local source="$PIXIED_TEST_ROOT/release-lock-source"
+    local state="$PIXIED_TEST_ROOT/release-lock-state"
+    local home="$PIXIED_TEST_ROOT/release-lock-home"
+    mkdir -p "$home" "$state/release-store/publish.lock"
+    pixied_make_release_source "$source" 1.2.3
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        source_root=$3
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        pixied_release_publish "$source_root"
+    ' bash "$PIXIED_REPO_ROOT" "$state" "$source"
+    assert_failure 1
+    assert_output --partial 'publish lock already exists'
+    [ ! -e "$state/release-store/current" ] ||
+        pixied_test_fail 'competing publish created a current pointer'
+}
+
+@test "release leases distinguish live and stale entries" {
+    local state="$PIXIED_TEST_ROOT/release-lease-state"
+    local home="$PIXIED_TEST_ROOT/release-lease-home"
+    local stale="$state/release-store/leases/1.2.3/stale-lease"
+    mkdir -p "$home" "${stale%/*}"
+    printf 'pid=2147483647\ncomm=no-such-process\nversion=1.2.3\n' >"$stale"
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        pixied_release_lease_sweep
+    ' bash "$PIXIED_REPO_ROOT" "$state"
+    assert_success
+    [ ! -e "$stale" ] || pixied_test_fail 'stale release lease was not removed'
+
+    run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        pixied_release_lease_acquire 1.2.3
+        [ -f "$PIXIED_RELEASE_LEASE_FILE" ]
+        pixied_release_lease_sweep
+        [ "${PIXIED_RELEASE_LIVE_VERSIONS[1.2.3]:-0}" = 1 ]
+        pixied_release_lease_release
+    ' bash "$PIXIED_REPO_ROOT" "$state"
+    assert_success
+}
+
+@test "NFS prune protects current retained and live releases" {
+    local state="$PIXIED_TEST_ROOT/prune-state"
+    local home="$PIXIED_TEST_ROOT/prune-home"
+    local local_home="$PIXIED_TEST_ROOT/prune-local"
+    local source_080="$PIXIED_TEST_ROOT/prune-source-0.8.0"
+    local source_090="$PIXIED_TEST_ROOT/prune-source-0.9.0"
+    local source_100="$PIXIED_TEST_ROOT/prune-source-1.0.0"
+    local source_110="$PIXIED_TEST_ROOT/prune-source-1.1.0"
+    local source_120="$PIXIED_TEST_ROOT/prune-source-1.2.0"
+    local lease_pid
+    mkdir -p "$home" "$local_home"
+    printf keep-local >"$local_home/marker"
+    pixied_make_release_source "$source_080" 0.8.0
+    pixied_make_release_source "$source_090" 0.9.0
+    pixied_make_release_source "$source_100" 1.0.0
+    pixied_make_release_source "$source_110" 1.1.0
+    pixied_make_release_source "$source_120" 1.2.0
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        shift 2
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        for source_root in "$@"; do
+            pixied_release_publish "$source_root"
+        done
+    ' bash "$PIXIED_REPO_ROOT" "$state" \
+        "$source_080" "$source_090" "$source_100" "$source_110" "$source_120"
+    assert_success
+
+    sleep 60 &
+    lease_pid=$!
+    lease_file=$(pixied_fake_lease "$state/release-store/leases/0.9.0" \
+        "$lease_pid" sleep run held)
+    printf 'version=0.9.0\n' >>"$lease_file"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-machine \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune
+    assert_failure 1
+    assert_output --partial 'prune requires an interactive confirmation or --yes'
+    [ -d "$state/release-store/releases/0.8.0" ] ||
+        pixied_test_fail 'non-interactive prune removed a candidate'
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-machine \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --yes
+    assert_success
+    [ ! -e "$state/release-store/releases/0.8.0" ] ||
+        pixied_test_fail 'default prune kept an unprotected release'
+    [ -d "$state/release-store/releases/0.9.0" ] ||
+        pixied_test_fail 'live release lease was not protected'
+    [ -d "$state/release-store/releases/1.1.0" ] ||
+        pixied_test_fail 'default keep count did not protect the newest retained release'
+    [ -d "$state/release-store/releases/1.2.0" ] ||
+        pixied_test_fail 'current release was removed'
+    assert_equal keep-local "$(<"$local_home/marker")"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-machine \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --keep 0 --yes
+    assert_success
+    [ ! -e "$state/release-store/releases/1.1.0" ] ||
+        pixied_test_fail '--keep 0 retained an extra release'
+    [ -d "$state/release-store/releases/0.9.0" ] ||
+        pixied_test_fail '--keep 0 removed a live release'
+    [ -d "$state/release-store/releases/1.2.0" ] ||
+        pixied_test_fail '--keep 0 removed current'
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-machine \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --keep nope --yes
+    assert_failure 2
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-machine \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --keep -1 --yes
+    assert_failure 2
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=local \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --yes
+    kill "$lease_pid" 2>/dev/null || true
+    wait "$lease_pid" 2>/dev/null || true
+    assert_failure 2
+    assert_output --partial 'prune is available only in NFS mode'
+}
+
+@test "NFS prune rejects unmanaged or corrupted release entries" {
+    local state="$PIXIED_TEST_ROOT/prune-invalid-state"
+    local home="$PIXIED_TEST_ROOT/prune-invalid-home"
+    local source_old="$PIXIED_TEST_ROOT/prune-invalid-source-old"
+    local source_current="$PIXIED_TEST_ROOT/prune-invalid-source-current"
+    local releases="$state/release-store/releases"
+    mkdir -p "$home"
+    pixied_make_release_source "$source_old" 1.0.0
+    pixied_make_release_source "$source_current" 1.1.0
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        state=$2
+        old_source=$3
+        current_source=$4
+        . "$repo/lib/common.sh"
+        . "$repo/lib/paths.sh"
+        . "$repo/lib/state.sh"
+        . "$repo/lib/release.sh"
+        export PIXIED_HOME_MODE=nfs PIXIED_STATE_DIR="$state"
+        trap pixied_exit_handler EXIT
+        pixied_release_publish "$old_source"
+        pixied_release_publish "$current_source"
+    ' bash "$PIXIED_REPO_ROOT" "$state" "$source_old" "$source_current"
+    assert_success
+
+    mkdir -p "$releases/not-a-version"
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-invalid \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --yes
+    assert_failure 2
+    assert_output --partial 'invalid release version: not-a-version'
+    [ -d "$releases/1.0.0" ] || pixied_test_fail 'unmanaged entry check removed a release'
+    [ -d "$releases/1.1.0" ] || pixied_test_fail 'unmanaged entry check removed current'
+    rm -rf -- "$releases/not-a-version"
+
+    printf 'corrupted\n' >>"$releases/1.0.0/release-manifest"
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        PIXIED_STATE_DIR="$state" PIXIED_MACHINE_ID=prune-invalid \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" prune --yes
+    assert_failure
+    assert_output --partial 'manifest does not match payload'
+    [ -d "$releases/1.0.0" ] || pixied_test_fail 'corrupt release was removed before validation'
+    [ -d "$releases/1.1.0" ] || pixied_test_fail 'corrupt release check removed current'
+}
+
+@test "deployment helper promotes a validated release source" {
+    local source="$PIXIED_TEST_ROOT/deploy-helper-source"
+    local destination="$PIXIED_TEST_ROOT/deploy-helper-data/pixied"
+    local home="$PIXIED_TEST_ROOT/deploy-helper-home"
+    mkdir -p "$home"
+    pixied_make_release_source "$source" 1.2.3
+
+    run env HOME="$home" bash -c '
+        set -Eeuo pipefail
+        repo=$1
+        source_root=$2
+        destination=$3
+        . "$repo/install-local.sh"
+        pixied_install_deploy_source "$source_root" "$destination"
+    ' bash "$PIXIED_REPO_ROOT" "$source" "$destination"
+    assert_success
+    assert_equal 1.2.3 "$(pixied_version_from_source "$destination/bin/pixied")"
+    [ -f "$destination/lib/release.sh" ] ||
+        pixied_test_fail 'release source library was not deployed'
+}
+
+@test "NFS install deploys local payload before selecting the shared release" {
+    local source="$PIXIED_TEST_ROOT/nfs-install-source"
+    local same_version_source="$PIXIED_TEST_ROOT/nfs-install-same-version-source"
+    local failed_source="$PIXIED_TEST_ROOT/nfs-install-failed-source"
+    local account_home="$PIXIED_TEST_ROOT/nfs-install-account-home"
+    local local_home="$PIXIED_TEST_ROOT/nfs-install-local-home"
+    local data="$PIXIED_TEST_ROOT/nfs-install-data"
+    local config="$PIXIED_TEST_ROOT/nfs-install-config"
+    local state="$PIXIED_TEST_ROOT/nfs-install-state"
+    local fake_pixi="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    local common_hash_before
+    mkdir -p "$account_home" "$local_home"
+    pixied_make_release_source "$source" 1.2.3
+    pixied_make_release_source "$same_version_source" 1.2.3
+    printf '\nchanged manifest\n' >>"$same_version_source/lib/common.sh"
+    pixied_make_release_source "$failed_source" 1.2.4
+
+    run env HOME="$account_home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID=nfs-install PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$source/install-local.sh" --home-mode nfs --local-home "$local_home" \
+        --session-manager none --machine-id nfs-install --yes
+    assert_success
+    [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
+        pixied_test_fail 'initial NFS install did not select its release'
+    assert_equal 1.2.3 "$(pixied_version_from_source "$data/pixied/bin/pixied")"
+    grep -Fq -- 'payload_release_version=1.2.3' \
+        "$state/pixied/machines/nfs-install/state" ||
+        pixied_test_fail 'initial NFS install did not record the payload version'
+    grep -Eq '^payload_release_manifest_hash=[0-9a-f]{64}$' \
+        "$state/pixied/machines/nfs-install/state" ||
+        pixied_test_fail 'initial NFS install did not record the manifest hash'
+    common_hash_before=$(sha256sum "$data/pixied/lib/common.sh" | awk '{print $1}')
+
+    run env HOME="$account_home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID=nfs-install PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$same_version_source/install-local.sh" --home-mode nfs --local-home "$local_home" \
+        --session-manager none --machine-id nfs-install --yes
+    assert_failure 1
+    assert_output --partial 'different manifest'
+    [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
+        pixied_test_fail 'same-version mismatch changed the shared current release'
+    assert_equal "$common_hash_before" "$(sha256sum "$data/pixied/lib/common.sh" | awk '{print $1}')"
+
+    run env HOME="$account_home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID=nfs-install PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        PIXIED_DEPLOY_FAIL_PROMOTE=1 \
+        bash "$failed_source/install-local.sh" --home-mode nfs --local-home "$local_home" \
+        --session-manager none --machine-id nfs-install --yes
+    assert_failure 1
+    [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
+        pixied_test_fail 'failed local deployment changed the shared current release'
+    assert_equal 1.2.3 "$(pixied_version_from_source "$data/pixied/bin/pixied")"
+    grep -Fq -- 'payload_release_version=1.2.3' \
+        "$state/pixied/machines/nfs-install/state" ||
+        pixied_test_fail 'failed local deployment changed the payload state'
+}
+
+@test "NFS source install keeps an auto-detected machine ID for release metadata" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-auto-machine-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-auto-machine-local"
+    local data="$PIXIED_TEST_ROOT/nfs-auto-machine-data"
+    local config="$PIXIED_TEST_ROOT/nfs-auto-machine-config"
+    local state="$PIXIED_TEST_ROOT/nfs-auto-machine-state"
+    local state_file machine_id
+    mkdir -p "$account_home" "$local_home"
+
+    run env -u PIXIED_MACHINE_ID -u PIXIED_HOME_MODE -u PIXIED_LOCAL_HOME \
+        -u PIXIED_SESSION_MANAGER -u PIXIED_PIXI_HOME HOME="$account_home" \
+        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$local_home" --session-manager none --yes
+    assert_success
+
+    state_file=$(find "$state/pixied/machines" -mindepth 2 -maxdepth 2 \
+        -type f -name state -print -quit)
+    [ -n "$state_file" ] || pixied_test_fail 'auto-detected machine state is missing'
+    machine_id=${state_file#"$state/pixied/machines/"}
+    machine_id=${machine_id%/state}
+    [ -n "$machine_id" ] || pixied_test_fail 'auto-detected machine ID is empty'
+    grep -Fq -- "machine_id=$machine_id" "$state_file" ||
+        pixied_test_fail 'state does not record the auto-detected machine ID'
+    grep -Fq -- 'payload_release_version=0.6.3' "$state_file" ||
+        pixied_test_fail 'state does not record the payload release version'
+    grep -Eq '^payload_release_manifest_hash=[0-9a-f]{64}$' "$state_file" ||
+        pixied_test_fail 'state does not record the payload release manifest hash'
+    [ -f "$state/pixied/release-store/current" ] ||
+        pixied_test_fail 'auto-detected NFS install did not select current release'
 }
 
 @test "local installer rejects an unspecified NFS local home before deployment" {
@@ -1131,6 +1624,8 @@ CURL
     assert_output --partial 'pixied/install-local.sh'
     assert_output --partial 'pixied/bin/pixied'
     assert_output --partial 'pixied/lib/pixi.sh'
+    assert_output --partial 'pixied/lib/release.sh'
+    assert_output --partial 'pixied/release-manifest'
     assert_output --partial 'pixied/README.md'
     assert_output --partial 'pixied/README.ja.md'
     if [[ "$output" == *'pixied/tests/'* ]] || [[ "$output" == *'pixied/.git/'* ]]; then
@@ -3180,6 +3675,80 @@ CASES
         pixied_test_fail "NFS path resolution changed account home or PIXI_HOME"
 }
 
+@test "NFS release store paths are derived from shared state and state metadata is optional" {
+    local account_home="$PIXIED_TEST_ROOT/release-store-account"
+    local local_home="$PIXIED_TEST_ROOT/release-store-local"
+    local state="$PIXIED_TEST_ROOT/release-store-state"
+    local state_file="$state/pixied/machines/release-store-machine/state"
+    mkdir -p "$account_home" "$local_home" "$state"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_STATE_DIR="$state/pixied" PIXIED_RELEASE_STORE_DIR=/forged \
+        PIXIED_MACHINE_ID=release-store-machine bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        printf "%s\n" "$PIXIED_RELEASE_STORE_DIR"
+        printf "%s\n" "$(pixied_release_version_dir 1.2.3)"
+        printf "%s\n" "$(pixied_release_current_path)"
+        printf "%s\n" "$(pixied_release_publish_lock_path)"
+        printf "%s\n" "$(pixied_release_lease_dir 1.2.3)"
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output --partial "$state/pixied/release-store"
+    assert_output --partial "$state/pixied/release-store/releases/1.2.3"
+    assert_output --partial "$state/pixied/release-store/current"
+    assert_output --partial "$state/pixied/release-store/publish.lock"
+    assert_output --partial "$state/pixied/release-store/leases/1.2.3"
+    [[ "$output" != *"/forged"* ]] || pixied_test_fail "release store accepted an environment override"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=release-store-machine \
+        bash -c '. "$1/lib/common.sh"; . "$1/lib/paths.sh"; pixied_resolve_paths; pixied_release_store_dir' \
+        bash "$PIXIED_REPO_ROOT"
+    assert_failure 2
+    assert_output --partial 'release store is available only in NFS mode'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=release-store-machine \
+        bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        pixied_resolve_paths
+        mkdir -p "$PIXIED_MACHINE_STATE_DIR"
+        pixied_state_initialize_from_paths
+        pixied_state_lock_acquire
+        pixied_state_write
+        pixied_state_lock_release
+        pixied_state_load
+        pixied_state_has payload_release_version && exit 1
+        pixied_state_has payload_release_manifest_hash && exit 1
+        printf "legacy state accepted\n"
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output 'legacy state accepted'
+
+    printf 'payload_release_version=1.2.3\n' >>"$state_file"
+    printf 'payload_release_manifest_hash=%064d\n' 0 | tr '0' 'a' >>"$state_file"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=release-store-machine \
+        bash -c '. "$1/lib/common.sh"; . "$1/lib/paths.sh"; . "$1/lib/state.sh"; pixied_resolve_paths; pixied_state_load; printf "%s %s\n" "${PIXIED_STATE[payload_release_version]}" "${PIXIED_STATE[payload_release_manifest_hash]}"' \
+        bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output '1.2.3 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+    sed -i 's/^payload_release_version=.*/payload_release_version=bad\/version/' "$state_file"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=local PIXIED_MACHINE_ID=release-store-machine \
+        bash -c '. "$1/lib/common.sh"; . "$1/lib/paths.sh"; . "$1/lib/state.sh"; pixied_resolve_paths; pixied_state_load' \
+        bash "$PIXIED_REPO_ROOT"
+    assert_failure
+    assert_output --partial 'invalid payload release version'
+}
+
 # US-106-1
 # US-106-2
 # US-106-3
@@ -4191,6 +4760,411 @@ EOF
         'printf after-uninstall >"$HOME/after-uninstall-marker"'
     assert_success
     assert_equal 'after-uninstall' "$(<"$local_home_b/after-uninstall-marker")"
+}
+
+@test "NFS dispatcher installs a fresh host and keeps runtime local without current" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-dispatcher-install-account"
+    local local_home_a="$PIXIED_TEST_ROOT/nfs-dispatcher-install-local-a"
+    local local_home_b="$PIXIED_TEST_ROOT/nfs-dispatcher-install-local-b"
+    local state="$PIXIED_TEST_ROOT/nfs-dispatcher-install-state"
+    local machine_a=nfs-dispatcher-install-a
+    local machine_b=nfs-dispatcher-install-b
+    local launcher="$account_home/.local/bin/pixied"
+    local current="$state/pixied/release-store/current"
+    local data_b="$local_home_b/.local/share/pixied"
+    local state_b="$state/pixied/machines/$machine_b/state"
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    [ -x "$launcher" ] || pixied_test_fail 'shared dispatcher was not created'
+    if grep -Fq -- 'releases/0.6.3' "$launcher"; then
+        pixied_test_fail 'dispatcher embedded a release version'
+    fi
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
+        --session-manager none --machine-id "$machine_b" --yes
+    assert_success
+    [ -x "$data_b/bin/pixied" ] || pixied_test_fail 'fresh host did not deploy local payload'
+    [ -f "$state_b" ] || pixied_test_fail 'fresh host did not create state'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
+        'printf dispatcher-local >"$HOME/dispatcher-local"'
+    assert_success
+    assert_equal dispatcher-local "$(<"$local_home_b/dispatcher-local")"
+    [ ! -e "$local_home_a/dispatcher-local" ] ||
+        pixied_test_fail 'runtime command used another host local home'
+
+    mv "$current" "$current.saved"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
+        'printf runtime-without-current >"$HOME/runtime-without-current"'
+    mv "$current.saved" "$current"
+    assert_success
+    assert_equal runtime-without-current "$(<"$local_home_b/runtime-without-current")"
+}
+
+@test "NFS version reports payload drift and runtime warns without auto-updating" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-version-account"
+    local local_home_a="$PIXIED_TEST_ROOT/nfs-version-local-a"
+    local local_home_b="$PIXIED_TEST_ROOT/nfs-version-local-b"
+    local state="$PIXIED_TEST_ROOT/nfs-version-state"
+    local machine_a=nfs-version-a
+    local machine_b=nfs-version-b
+    local launcher="$account_home/.local/bin/pixied"
+    local state_b="$state/pixied/machines/$machine_b/state"
+    local data_b="$local_home_b/.local/share/pixied"
+    local current_version
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    current_version=$(pixied_version_from_source "$PIXIED_REPO_ROOT/bin/pixied")
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" version
+    assert_success
+    assert_output --partial "shared release: $current_version"
+    assert_output --partial 'local payload: not installed'
+    assert_output --partial 'status: not installed; run `pixied install`'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
+        --session-manager none --machine-id "$machine_b" --yes
+    assert_success
+
+    cp -- "$state_b" "$state_b.managed"
+    sed -i -e '/^payload_release_version=/d' -e '/^payload_release_manifest_hash=/d' "$state_b"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" version
+    assert_success
+    assert_output --partial 'local payload: 0.6.3 (legacy state)'
+    assert_output --partial 'status: legacy state; run `pixied install`'
+    mv -- "$state_b.managed" "$state_b"
+
+    sed -i 's/^PIXIED_VERSION="[^"]*"$/PIXIED_VERSION="0.6.2"/' \
+        "$data_b/bin/pixied"
+    sed -i 's/^payload_release_version=.*/payload_release_version=0.6.2/' "$state_b"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" version
+    assert_success
+    assert_output --partial "shared release: $current_version"
+    assert_output --partial 'local payload: 0.6.2'
+    assert_output --partial 'status: mismatch; run `pixied install`'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
+        'printf old-payload >"$HOME/nfs-version-marker"'
+    assert_success
+    assert_equal old-payload "$(<"$local_home_b/nfs-version-marker")"
+    assert_output --partial 'run `pixied install`'
+    [ "$(grep -Fc -- 'run `pixied install`' <<<"$output")" -eq 1 ] ||
+        pixied_test_fail 'runtime version warning was emitted more than once'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" hook bash
+    assert_success
+    assert_output --partial 'runtime-hook.bash'
+    [[ "$output" != *'run `pixied install`'* ]] ||
+        pixied_test_fail 'hook stdout included a runtime warning'
+}
+
+@test "NFS uninstall preserves shared distribution until the last machine" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-uninstall-account"
+    local local_home_a="$PIXIED_TEST_ROOT/nfs-uninstall-local-a"
+    local local_home_b="$PIXIED_TEST_ROOT/nfs-uninstall-local-b"
+    local state="$PIXIED_TEST_ROOT/nfs-uninstall-state"
+    local machine_a=nfs-uninstall-a
+    local machine_b=nfs-uninstall-b
+    local launcher="$account_home/.local/bin/pixied"
+    local release_store="$state/pixied/release-store"
+    local data_b="$local_home_b/.local/share/pixied"
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
+        --session-manager none --machine-id "$machine_b" --yes
+    assert_success
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" bash "$launcher" uninstall --yes
+    assert_success
+    [ ! -e "$state/pixied/machines/$machine_a/state" ] ||
+        pixied_test_fail 'machine A state remains after shared uninstall'
+    [ -f "$state/pixied/machines/$machine_b/state" ] ||
+        pixied_test_fail 'machine B state was removed with machine A'
+    [ -x "$launcher" ] || pixied_test_fail 'shared dispatcher was removed too early'
+    [ -f "$release_store/current" ] || pixied_test_fail 'shared current was removed too early'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
+        'printf peer-runtime >"$HOME/peer-runtime"'
+    assert_success
+    assert_equal peer-runtime "$(<"$local_home_b/peer-runtime")"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash "$launcher" uninstall --yes
+    assert_success
+    [ ! -e "$state/pixied/machines/$machine_b/state" ] ||
+        pixied_test_fail 'last machine state remains'
+    [ ! -e "$data_b" ] || pixied_test_fail 'last machine local payload remains'
+    [ ! -e "$release_store" ] || pixied_test_fail 'last machine left shared release store'
+    [ ! -e "$launcher" ] || pixied_test_fail 'last machine left shared dispatcher'
+    [ -d "$account_home" ] || pixied_test_fail 'last uninstall removed account home'
+}
+
+@test "NFS dispatcher recovers an interrupted first publish without current" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-uninstall-recovery-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-uninstall-recovery-local"
+    local state="$PIXIED_TEST_ROOT/nfs-uninstall-recovery-state"
+    local machine_id=nfs-uninstall-recovery
+    local launcher="$account_home/.local/bin/pixied"
+    local data="$local_home/.local/share/pixied"
+    local state_file="$state/pixied/machines/$machine_id/state"
+    local release_store="$state/pixied/release-store"
+    local current="$release_store/current"
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash -c '
+            set -Eeuo pipefail
+            repo=$1
+            . "$repo/install-local.sh"
+            pixied_release_select_current() { return 1; }
+            pixied_install_local --yes
+        ' bash "$PIXIED_REPO_ROOT"
+    assert_failure 1
+    [ -f "$state_file" ] || pixied_test_fail 'interrupted publish left no machine state'
+    [ -x "$launcher" ] || pixied_test_fail 'interrupted publish left no stable dispatcher'
+    [ -d "$data" ] || pixied_test_fail 'interrupted publish removed local payload'
+    [ ! -e "$current" ] && [ ! -L "$current" ] ||
+        pixied_test_fail 'interrupted publish unexpectedly selected current'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" bash "$launcher" uninstall --force --yes
+    assert_success
+    [ ! -e "$state_file" ] || pixied_test_fail 'recovery uninstall left machine state'
+    [ ! -e "$data" ] || pixied_test_fail 'recovery uninstall left local payload'
+    [ ! -e "$release_store" ] || pixied_test_fail 'recovery uninstall left release store'
+    [ ! -e "$launcher" ] || pixied_test_fail 'recovery uninstall left stable dispatcher'
+}
+
+@test "NFS dispatcher refuses fallback for an unsafe current pointer" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-uninstall-unsafe-current-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-uninstall-unsafe-current-local"
+    local state="$PIXIED_TEST_ROOT/nfs-uninstall-unsafe-current-state"
+    local machine_id=nfs-uninstall-unsafe-current
+    local launcher="$account_home/.local/bin/pixied"
+    local data="$local_home/.local/share/pixied"
+    local state_file="$state/pixied/machines/$machine_id/state"
+    local release_store="$state/pixied/release-store"
+    local current="$release_store/current"
+    local pointer
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    pointer=$(<"$current")
+
+    rm "$current"
+    ln -s "$release_store/releases/0.6.3" "$current"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" bash "$launcher" uninstall --force --yes
+    assert_failure 1
+    assert_output --partial 'managed path is not canonical'
+    [ -L "$current" ] || pixied_test_fail 'unsafe current symlink was changed'
+    [ -f "$state_file" ] || pixied_test_fail 'unsafe current symlink removed state'
+    [ -d "$data" ] || pixied_test_fail 'unsafe current symlink removed local payload'
+    [ -x "$launcher" ] || pixied_test_fail 'unsafe current symlink removed dispatcher'
+    [ -d "$release_store" ] || pixied_test_fail 'unsafe current symlink removed release store'
+
+    rm "$current"
+    printf 'not-a-current-pointer\n' >"$current"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" bash "$launcher" uninstall --force --yes
+    assert_failure 1
+    assert_output --partial 'current release pointer is malformed'
+    assert_equal 'not-a-current-pointer' "$(<"$current")"
+    [ -f "$state_file" ] || pixied_test_fail 'malformed current removed state'
+    [ -d "$data" ] || pixied_test_fail 'malformed current removed local payload'
+    [ -x "$launcher" ] || pixied_test_fail 'malformed current removed dispatcher'
+    [ -d "$release_store" ] || pixied_test_fail 'malformed current removed release store'
+    [ -n "$pointer" ] || pixied_test_fail 'initial current pointer was empty'
+}
+
+@test "last NFS uninstall refuses a live release management lease" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-uninstall-lease-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-uninstall-lease-local"
+    local state="$PIXIED_TEST_ROOT/nfs-uninstall-lease-state"
+    local machine_id=nfs-uninstall-lease
+    local launcher="$account_home/.local/bin/pixied"
+    local data="$local_home/.local/share/pixied"
+    local release_lease_dir="$state/pixied/release-store/leases/0.6.3"
+    local lease_pid lease_file
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    sleep 60 &
+    lease_pid=$!
+    lease_file=$(pixied_fake_lease "$release_lease_dir" "$lease_pid" sleep run held)
+    printf 'version=0.6.3\n' >>"$lease_file"
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" bash "$launcher" uninstall --yes
+    kill "$lease_pid" 2>/dev/null || true
+    wait "$lease_pid" 2>/dev/null || true
+    assert_failure 1
+    assert_output --partial 'release management lease is active'
+    [ -f "$state/pixied/machines/$machine_id/state" ] ||
+        pixied_test_fail 'live release lease uninstall removed state'
+    [ -d "$data" ] || pixied_test_fail 'live release lease uninstall removed local payload'
+    [ -d "$state/pixied/release-store" ] ||
+        pixied_test_fail 'live release lease uninstall removed shared store'
+}
+
+@test "last NFS uninstall refuses unmanaged shared distribution entries" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-uninstall-unmanaged-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-uninstall-unmanaged-local"
+    local state="$PIXIED_TEST_ROOT/nfs-uninstall-unmanaged-state"
+    local machine_id=nfs-uninstall-unmanaged
+    local launcher="$account_home/.local/bin/pixied"
+    local data="$local_home/.local/share/pixied"
+    local release_store="$state/pixied/release-store"
+    local unmanaged="$release_store/unmanaged-entry"
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    printf 'do not remove\n' >"$unmanaged"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" bash "$launcher" uninstall --yes
+    assert_failure 1
+    assert_output --partial 'shared release store contains unmanaged entry'
+    [ -f "$unmanaged" ] || pixied_test_fail 'unmanaged release-store entry was removed'
+    [ -f "$state/pixied/machines/$machine_id/state" ] ||
+        pixied_test_fail 'unmanaged release-store rejection removed state'
+    [ -d "$data" ] || pixied_test_fail 'unmanaged release-store rejection removed local payload'
+}
+
+@test "NFS install migrates a peer with legacy state metadata" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-legacy-peer-account"
+    local local_home_a="$PIXIED_TEST_ROOT/nfs-legacy-peer-local-a"
+    local local_home_b="$PIXIED_TEST_ROOT/nfs-legacy-peer-local-b"
+    local state="$PIXIED_TEST_ROOT/nfs-legacy-peer-state"
+    local machine_a=nfs-legacy-peer-a
+    local machine_b=nfs-legacy-peer-b
+    local launcher="$account_home/.local/bin/pixied"
+    local state_a="$state/pixied/machines/$machine_a/state"
+    local data_b="$local_home_b/.local/share/pixied"
+    mkdir -p "$account_home" "$local_home_a" "$local_home_b"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
+        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    sed -i -e '/^payload_release_version=/d' \
+        -e '/^payload_release_manifest_hash=/d' "$state_a"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
+        --session-manager none --machine-id "$machine_b" --yes
+    assert_success
+    [ -x "$data_b/bin/pixied" ] || pixied_test_fail 'legacy peer install did not deploy payload'
+    [ -f "$state/pixied/machines/$machine_b/state" ] ||
+        pixied_test_fail 'legacy peer install did not create state'
+    grep -Fq -- 'payload_release_version=' "$state/pixied/machines/$machine_b/state" ||
+        pixied_test_fail 'migrated machine did not record release metadata'
+}
+
+@test "legacy NFS uninstall works when no release store exists" {
+    local account_home="$PIXIED_TEST_ROOT/nfs-legacy-uninstall-account"
+    local local_home="$PIXIED_TEST_ROOT/nfs-legacy-uninstall-local"
+    local state="$PIXIED_TEST_ROOT/nfs-legacy-uninstall-state"
+    local machine_id=nfs-legacy-uninstall
+    local launcher="$account_home/.local/bin/pixied"
+    local data="$local_home/.local/share/pixied"
+    mkdir -p "$account_home" "$local_home"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    rm -rf -- "$state/pixied/release-store"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
+        PIXIED_MACHINE_ID="$machine_id" bash "$data/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$data" ] || pixied_test_fail 'legacy uninstall left local payload'
+    [ ! -e "$state/pixied/machines/$machine_id/state" ] ||
+        pixied_test_fail 'legacy uninstall left state'
+    [ ! -e "$launcher" ] || pixied_test_fail 'legacy uninstall left launcher'
 }
 
 @test "NFS uninstall keeps identical local roots machine-local" {

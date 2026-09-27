@@ -15,8 +15,9 @@ readonly PIXIED_EXIT_FAILURE=1
 readonly PIXIED_EXIT_USAGE=2
 readonly PIXIED_EXIT_SIGINT=130
 readonly PIXIED_EXIT_SIGTERM=143
+readonly PIXIED_SAFE_VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
 export PIXIED_EXIT_OK PIXIED_EXIT_FAILURE PIXIED_EXIT_USAGE \
-    PIXIED_EXIT_SIGINT PIXIED_EXIT_SIGTERM
+    PIXIED_EXIT_SIGINT PIXIED_EXIT_SIGTERM PIXIED_SAFE_VERSION_PATTERN
 
 if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
     readonly PIXIED_COLOR_RESET=$'\033[0m'
@@ -198,6 +199,14 @@ pixied_cleanup() {
     if [ -n "${PIXIED_LEASE_FILE:-}" ] &&
         declare -F pixied_lease_release >/dev/null 2>&1; then
         pixied_lease_release
+    fi
+    if [ -n "${PIXIED_RELEASE_LOCK_DIR:-}" ] &&
+        declare -F pixied_release_publish_lock_release >/dev/null 2>&1; then
+        pixied_release_publish_lock_release
+    fi
+    if [ -n "${PIXIED_RELEASE_LEASE_FILE:-}" ] &&
+        declare -F pixied_release_lease_release >/dev/null 2>&1; then
+        pixied_release_lease_release
     fi
 }
 

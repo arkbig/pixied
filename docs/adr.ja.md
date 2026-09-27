@@ -229,3 +229,27 @@ leaseでruntime生存を分離し`--force`を警告降格に限定する
 - `uninstall --force`で確認も省略する案: 実行中runtimeが使うfileを削除する危険な操作から利用者を守れない。
 
 **Related**: [US-107](user-stories.ja.md#us-107)、[ADR-005](#adr-005)、[ADR-007](#adr-007)、[ADR-010](#adr-010)
+
+## ADR-012
+
+version付きimmutableなReleaseとatomicな`current`選択を採用する
+
+**Status**: Accepted
+
+### Context
+
+NFS共有ホームでは、公開Releaseを一台でdownload・検証した後、別hostが同じarchiveをnetworkから取得せずにlocal runtimeを更新できる必要がある。一方でshared filesystem上の可変なsourceをruntimeが直接読むと、Release更新やpruneが実行中runtimeのsourceを壊し、host間のpayloadやcacheも混ざる。
+
+### Decision
+
+共有state rootの下にversionごとのimmutableなRelease tree、`current` pointer、publish lock、version別release leaseを置く。Releaseはallowlist、mode、owner、manifest、SHA-256を検証してから同一filesystem内でstageからpromoteする。同じversionの既存treeはmanifestが完全一致する場合だけ再利用する。
+
+`current`はversionとmanifest hashを持つregular fileとしてtemporary fileからatomicに置き換える。NFS stable dispatcherは管理commandだけを検証済み`current`へ振り分け、`shell`、`run`、hook、generateなどのruntime経路はcurrent machineのlocal payloadを使う。別hostの`pixied install`は検証済みshared`current`をsourceにしてlocal payloadを更新し、shared Release treeをruntime sourceとして直接実行しない。
+
+### Rejected alternatives
+
+- shared Release treeを同じpathへ上書きする案: 実行中の管理commandや別hostの検証中sourceを変更し、同じversionの内容差分も検出できない。
+- shared Release treeをruntimeから直接sourceする案: host-local runtime、cache、leaseの分離を壊し、別hostの更新・pruneと競合する。
+- 各hostが通常のruntime commandでdownload・自動更新する案: network依存と予期しないpayload変更を増やし、version不一致時に利用者が選択できない。
+
+**Related**: [US-106](user-stories.ja.md#us-106)、[US-107](user-stories.ja.md#us-107)、[US-110](user-stories.ja.md#us-110)

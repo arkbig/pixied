@@ -77,6 +77,28 @@ bash /tmp/pixied-install.sh --home-mode nfs
 
 Settings are confirmed with an interactive wizard. Use `--yes` to proceed non-interactively. See the option list with `pixied install --help`.
 
+## Updating NFS Releases
+
+With an NFS-shared account home, install a public Release on one host first. That host verifies the archive, publishes an immutable shared Release, selects it as `current`, and updates its own machine-local payload.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arkbig/pixied/main/install.sh |
+  bash -s -- --home-mode nfs --local-home "/scratch/$USER" --yes
+```
+
+On another host, create its own local home and run `pixied install`. The command uses the selected shared Release and does not download it again.
+
+```bash
+mkdir -p /scratch/$USER
+pixied install --home-mode nfs --local-home "/scratch/$USER" --yes
+```
+
+After the first install on that host, run `pixied install` again whenever the shared `current` Release changes. `pixied version` shows the shared Release and this host's local payload. A mismatch is informational: `pixied shell` and `pixied run` continue with the verified local payload and do not update it automatically. Run `pixied install` to update the host.
+
+Use `pixied prune --keep 1` to remove old validated Releases after confirmation, or add `--yes` for a non-interactive operation. The selected `current` Release, retained history, and Releases used by live management commands are always protected. `prune` is available only in NFS mode and never removes a host-local payload or Pixi home.
+
+Uninstalling one NFS host removes its local payload and machine state while another valid machine remains. The shared dispatcher and Release store are removed only when the last valid machine is uninstalled.
+
 ## Commands
 
 ```text
@@ -87,6 +109,7 @@ pixied hook <bash|zsh>       Print shell initialization code
 pixied install               Install or repair the environment
 pixied uninstall             Clean up PixiEden-managed resources
 pixied generate <format>     Generate project integration files
+pixied prune [options]       Remove old shared NFS Releases
 pixied help                  Show help
 pixied version               Show the version
 ```

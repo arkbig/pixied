@@ -40,6 +40,8 @@ readonly PIXIED_STATE_KEY_ORDER=(
     launcher_hash
     created_data
     created_pixi_home
+    payload_release_version
+    payload_release_manifest_hash
 )
 
 # @description Check whether the given key is a known state key.
@@ -101,6 +103,14 @@ pixied_state_validate_value() {
     pixi_binary_hash | direnv_hash | zellij_hash | runtime_hook_hash | launcher_hash)
         [ -z "$value" ] || [[ "$value" =~ ^[0-9a-f]{64}$ ]] ||
             pixied_die "invalid state hash: $key"
+        ;;
+    payload_release_version)
+        [[ "$value" =~ $PIXIED_SAFE_VERSION_PATTERN ]] ||
+            pixied_die "invalid payload release version: $value"
+        ;;
+    payload_release_manifest_hash)
+        [[ "$value" =~ ^[0-9a-f]{64}$ ]] ||
+            pixied_die "invalid payload release manifest hash"
         ;;
     *)
         if pixied_state_path_key "$key"; then
