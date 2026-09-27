@@ -1024,8 +1024,9 @@ PYPROJECT
     local data="$PIXIED_TEST_ROOT/nfs-auto-machine-data"
     local config="$PIXIED_TEST_ROOT/nfs-auto-machine-config"
     local state="$PIXIED_TEST_ROOT/nfs-auto-machine-state"
-    local state_file machine_id
+    local state_file machine_id expected_version
     mkdir -p "$account_home" "$local_home"
+    expected_version=$(pixied_version_from_source "$PIXIED_REPO_ROOT/bin/pixied")
 
     run env -u PIXIED_MACHINE_ID -u PIXIED_HOME_MODE -u PIXIED_LOCAL_HOME \
         -u PIXIED_SESSION_MANAGER -u PIXIED_PIXI_HOME HOME="$account_home" \
@@ -1043,7 +1044,7 @@ PYPROJECT
     [ -n "$machine_id" ] || pixied_test_fail 'auto-detected machine ID is empty'
     grep -Fq -- "machine_id=$machine_id" "$state_file" ||
         pixied_test_fail 'state does not record the auto-detected machine ID'
-    grep -Fq -- 'payload_release_version=0.6.3' "$state_file" ||
+    grep -Fq -- "payload_release_version=$expected_version" "$state_file" ||
         pixied_test_fail 'state does not record the payload release version'
     grep -Eq '^payload_release_manifest_hash=[0-9a-f]{64}$' "$state_file" ||
         pixied_test_fail 'state does not record the payload release manifest hash'
@@ -4858,7 +4859,7 @@ EOF
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
         PIXIED_MACHINE_ID="$machine_b" bash "$launcher" version
     assert_success
-    assert_output --partial 'local payload: 0.6.3 (legacy state)'
+    assert_output --partial "local payload: $current_version (legacy state)"
     assert_output --partial 'status: legacy state; run `pixied install`'
     mv -- "$state_b.managed" "$state_b"
 

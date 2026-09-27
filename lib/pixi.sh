@@ -11,11 +11,11 @@ if [ -n "${PIXIED_PIXI_LOADED:-}" ]; then
 fi
 PIXIED_PIXI_LOADED=1
 
-readonly PIXIED_PIXI_VERSION_DEFAULT="0.76.1"
+readonly PIXIED_PIXI_VERSION_DEFAULT="0.81.0"
 # SHA-256 digests for the default Pixi release assets, matching
 # PIXIED_PIXI_VERSION_DEFAULT. Update them together when bumping the pin.
-readonly PIXIED_PIXI_SHA256_X86_64_DEFAULT="8e2ab7630f5bc1e8aa38d236842e20f565f7aa0834687e53670b7c86ba54c90f"
-readonly PIXIED_PIXI_SHA256_AARCH64_DEFAULT="e7c9d7f128fe02d20b212c0ba9b8ab445907b415155b72ca93f3120e63a8fbb3"
+readonly PIXIED_PIXI_SHA256_X86_64_DEFAULT="7aa3ec39aecceff9062fa2ed4d42cbaa0bdc25ddea727d048e061cf188d434f6"
+readonly PIXIED_PIXI_SHA256_AARCH64_DEFAULT="eaf38e9109a319c67a04e02ab36d697c65e31d2f1f696a3e640e68a7444e0118"
 readonly PIXIED_PIXI_RELEASE_BASE="https://github.com/prefix-dev/pixi/releases/download"
 
 # @description Return the supported Linux Pixi platform identifier.
