@@ -37,7 +37,10 @@ pixied_require_absolute_path() {
 }
 
 # @description Canonicalize the path and print it.
-# Requires the realpath command and only canonicalizes without resolving symlinks.
+# Requires realpath and uses realpath -m, which resolves existing symlink
+# components and normalizes missing suffix components without requiring them
+# to exist. Unlike pixied_validate_canonical_path, this function accepts an
+# input alias and returns its physical canonical path.
 #
 # @arg $1 string The path to canonicalize
 # @stdout The canonicalized path
@@ -322,6 +325,8 @@ pixied_resolve_paths() {
                 if ! local_home=$(pixied_validate_nfs_local_home "$local_home"); then
                     return 1
                 fi
+            else
+                local_home=$(pixied_canonical_path "$local_home")
             fi
         else
             local_home=$account_home

@@ -1018,6 +1018,141 @@ PYPROJECT
         pixied_test_fail 'failed local deployment changed the payload state'
 }
 
+@test "symlinked NFS local home resolves to physical paths" {
+    local account_home="$PIXIED_TEST_ROOT/symlink-resolve-account"
+    local physical_root="$PIXIED_TEST_ROOT/physical-work"
+    local alias_root="$PIXIED_TEST_ROOT/alias-work"
+    local test_user=symlink-resolve-user
+    local alias_home="$alias_root/$test_user"
+    local physical_home="$physical_root/$test_user"
+    mkdir -p "$account_home" "$physical_home"
+    ln -s "$physical_root" "$alias_root"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
+        XDG_STATE_HOME="$PIXIED_TEST_ROOT/symlink-resolve-state" \
+        XDG_BIN_HOME="$PIXIED_TEST_ROOT/symlink-resolve-bin" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$alias_home" \
+        PIXIED_MACHINE_ID=symlink-resolve \
+        bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        pixied_resolve_paths 0
+        printf "local=%s\ndata=%s\nconfig=%s\npixi=%s\n" \
+            "$PIXIED_LOCAL_HOME" "$PIXIED_DATA_DIR" \
+            "$PIXIED_CONFIG_DIR" "$PIXIED_PIXI_HOME"
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output --partial "local=$physical_home"
+    assert_output --partial "data=$physical_home/.local/share/pixied"
+    assert_output --partial "config=$physical_home/.config/pixied"
+    assert_output --partial "pixi=$physical_home/.local/share/pixied/pixi"
+    if [[ "$output" == *"$alias_home"* ]]; then
+        pixied_test_fail "path resolution retained the symlink alias: $output"
+    fi
+}
+
+@test "source installer CLI local-home option accepts symlinked NFS home and preserves physical state" {
+    local account_home="$PIXIED_TEST_ROOT/symlink-install-account"
+    local physical_root="$PIXIED_TEST_ROOT/physical-work-install"
+    local alias_root="$PIXIED_TEST_ROOT/alias-work-install"
+    local alternate_root="$PIXIED_TEST_ROOT/alternate-work-install"
+    local test_user=symlink-install-user
+    local alias_home="$alias_root/$test_user"
+    local physical_home="$physical_root/$test_user"
+    local alternate_home="$alternate_root/$test_user"
+    local state="$PIXIED_TEST_ROOT/symlink-install-state"
+    local machine_id=symlink-install
+    local state_file state_before
+    local fake_pixi="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    mkdir -p "$account_home" "$physical_home" "$alternate_home"
+    ln -s "$physical_root" "$alias_root"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$alias_home" --session-manager none \
+        --machine-id "$machine_id" --yes
+    assert_success
+
+    state_file="$state/pixied/machines/$machine_id/state"
+    [ -f "$state_file" ] || pixied_test_fail "symlinked NFS state is missing"
+    [ -f "$physical_home/.local/share/pixied/bin/pixied" ] ||
+        pixied_test_fail "the promoted CLI was not deployed to the physical home"
+    [ -f "$state/pixied/release-store/current" ] ||
+        pixied_test_fail "the shared release was not selected after delegation"
+    assert_equal "$physical_home" "$(sed -n 's/^local_home=//p' "$state_file")"
+    assert_equal "$physical_home/.local/share/pixied" \
+        "$(sed -n 's/^data_dir=//p' "$state_file")"
+    assert_equal "$physical_home/.config/pixied" \
+        "$(sed -n 's/^config_dir=//p' "$state_file")"
+    assert_equal "$physical_home/.local/share/pixied/pixi" \
+        "$(sed -n 's/^pixi_home=//p' "$state_file")"
+    if grep -Fq -- "$alias_home" "$state_file"; then
+        pixied_test_fail "state persisted the symlink alias"
+    fi
+
+    state_before=$(<"$state_file")
+    run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$alias_home" --session-manager none \
+        --machine-id "$machine_id" --yes
+    assert_success
+    assert_equal "$state_before" "$(<"$state_file")"
+
+    rm "$alias_root"
+    ln -s "$alternate_root" "$alias_root"
+    state_before=$(<"$state_file")
+    run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$alias_home" --session-manager none \
+        --machine-id "$machine_id" --yes
+    assert_failure 1
+    assert_output --partial 'cannot change local home during reinstall'
+    assert_equal "$state_before" "$(<"$state_file")"
+    assert_equal "$physical_home" "$(sed -n 's/^local_home=//p' "$state_file")"
+}
+
+@test "source installer environment local home accepts symlinked NFS home and preserves physical state" {
+    local account_home="$PIXIED_TEST_ROOT/symlink-install-env-account"
+    local physical_root="$PIXIED_TEST_ROOT/physical-work-install-env"
+    local alias_root="$PIXIED_TEST_ROOT/alias-work-install-env"
+    local test_user=symlink-install-env-user
+    local alias_home="$alias_root/$test_user"
+    local physical_home="$physical_root/$test_user"
+    local state="$PIXIED_TEST_ROOT/symlink-install-env-state"
+    local machine_id=symlink-install-env
+    local state_file
+    local fake_pixi="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    mkdir -p "$account_home" "$physical_home"
+    ln -s "$physical_root" "$alias_root"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
+        XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs \
+        PIXIED_LOCAL_HOME="$alias_home" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+
+    state_file="$state/pixied/machines/$machine_id/state"
+    [ -f "$state_file" ] || pixied_test_fail "symlinked NFS environment state is missing"
+    [ -f "$physical_home/.local/share/pixied/bin/pixied" ] ||
+        pixied_test_fail "the environment-selected payload was not deployed to the physical home"
+    [ -f "$state/pixied/release-store/current" ] ||
+        pixied_test_fail "the environment-selected release was not selected after delegation"
+    assert_equal "$physical_home" "$(sed -n 's/^local_home=//p' "$state_file")"
+    assert_equal "$physical_home/.local/share/pixied" \
+        "$(sed -n 's/^data_dir=//p' "$state_file")"
+    assert_equal "$physical_home/.config/pixied" \
+        "$(sed -n 's/^config_dir=//p' "$state_file")"
+    assert_equal "$physical_home/.local/share/pixied/pixi" \
+        "$(sed -n 's/^pixi_home=//p' "$state_file")"
+    if grep -Fq -- "$alias_home" "$state_file"; then
+        pixied_test_fail "environment-selected state persisted the symlink alias"
+    fi
+}
+
 @test "NFS source install keeps an auto-detected machine ID for release metadata" {
     local account_home="$PIXIED_TEST_ROOT/nfs-auto-machine-account"
     local local_home="$PIXIED_TEST_ROOT/nfs-auto-machine-local"
@@ -1389,6 +1524,46 @@ MKDIR
     grep -Fq -- "data_dir=$local_home/.local/share/pixied" \
         "$state/pixied/machines/$machine_id/state" ||
         pixied_test_fail "selected local home was not used for the data directory"
+}
+
+@test "interactive NFS install canonicalizes a symlink local home in review and state" {
+    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
+    local home="$PIXIED_TEST_ROOT/wizard-symlink-home"
+    local physical_root="$PIXIED_TEST_ROOT/wizard-symlink-physical"
+    local alias_root="$PIXIED_TEST_ROOT/wizard-symlink-alias"
+    local alias_home="$alias_root/wizard-symlink-user"
+    local physical_home="$physical_root/wizard-symlink-user"
+    local state="$PIXIED_TEST_ROOT/wizard-symlink-state"
+    local machine_id=wizard-symlink-machine
+    local state_file
+    mkdir -p "$home" "$physical_home"
+    ln -s "$physical_root" "$alias_root"
+
+    run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash -c '
+        printf "%s\n" nfs "$1" none "" "" |
+            script -qec "bash \"$2\"" /dev/null
+    ' bash "$alias_home" "$PIXIED_REPO_ROOT/install-local.sh"
+    assert_success
+    assert_output --partial "Local home: $physical_home"
+    assert_output --partial "Pixi home: $physical_home/.local/share/pixied/pixi"
+    assert_output --partial "Data directory: $physical_home/.local/share/pixied"
+    assert_output --partial "Config directory: $physical_home/.config/pixied"
+
+    state_file="$state/pixied/machines/$machine_id/state"
+    [ -f "$state_file" ] || pixied_test_fail "symlinked NFS wizard state is missing"
+    assert_equal "$physical_home" "$(sed -n 's/^local_home=//p' "$state_file")"
+    assert_equal "$physical_home/.local/share/pixied" \
+        "$(sed -n 's/^data_dir=//p' "$state_file")"
+    assert_equal "$physical_home/.config/pixied" \
+        "$(sed -n 's/^config_dir=//p' "$state_file")"
+    assert_equal "$physical_home/.local/share/pixied/pixi" \
+        "$(sed -n 's/^pixi_home=//p' "$state_file")"
+    if grep -Fq -- "$alias_home" "$state_file"; then
+        pixied_test_fail "wizard state persisted the symlink alias"
+    fi
 }
 
 @test "interactive NFS install creates a missing local home after confirmation" {
