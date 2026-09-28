@@ -208,13 +208,45 @@ pixied_uninstall_paths_overlap() {
 # @exitcode 0 When the root is strictly below an NFS local home.
 # @exitcode 1 When the root is shared or the state is not NFS.
 pixied_uninstall_path_is_machine_local() {
+    pixied_state_path_is_machine_local "$1" "$2" "$3"
+}
+
+# @description Resolve an external managed root for uninstall comparison.
+# Machine-local NFS roots return an empty marker and never participate in current
+# host comparison or deletion decisions. Shared roots are canonicalized before
+# they can participate in comparison or deletion decisions.
+#
+# @arg $1 string The external managed root.
+# @arg $2 string The external home mode.
+# @arg $3 string The external local home.
+# @stdout The canonical shared path, or empty for a machine-local path.
+# @exitcode 0 When the path is valid for comparison.
+# @exitcode 1 When a shared path is not canonical.
+pixied_uninstall_external_root() {
     local path=$1 home_mode=$2 local_home=$3
-    [ "$home_mode" = nfs ] || return 1
-    path=$(pixied_canonical_path "$path")
-    local_home=$(pixied_canonical_path "$local_home")
-    [ "$path" != "$local_home" ] || return 1
-    case "$path/" in
-    "$local_home/"*) return 0 ;;
+    if pixied_uninstall_path_is_machine_local "$path" "$home_mode" "$local_home"; then
+        return 0
+    else
+        pixied_validate_canonical_path "$path"
+    fi
+}
+
+# @description Compare external paths without resolving peer-host symlinks.
+# This lexical check is used only for the integrity relationship between
+# machine-local roots that are never used by the current host.
+#
+# @arg $1 string The first absolute path.
+# @arg $2 string The second absolute path.
+# @exitcode 0 When either path contains the other or they are equal.
+# @exitcode 1 When the paths are disjoint.
+pixied_uninstall_paths_overlap_external() {
+    local left=$1 right=$2
+    [ "$left" = "$right" ] && return 0
+    case "$left/" in
+    "$right/"*) return 0 ;;
+    esac
+    case "$right/" in
+    "$left/"*) return 0 ;;
     esac
     return 1
 }
@@ -350,6 +382,11 @@ pixied_uninstall_validate_current_state() {
                 fi
                 ;;
             esac
+            if [ "$kind" = file ] && [ -n "$hash" ] &&
+                [ "$path" = "${PIXIED_STATE[runtime_hook_path]:-}" ] &&
+                ! pixied_hash_matches "$path" "$hash"; then
+                pixied_die "managed path hash does not match: $path; run 'pixied install' to regenerate the managed runtime hook, then retry uninstall"
+            fi
             pixied_validate_owned_path "$path" "$hash"
         fi
     done
@@ -368,6 +405,7 @@ pixied_uninstall_scan_other_states() {
     local current_data current_config current_command current_pixi
     local other_home_mode other_local_home
     local other_data other_config other_command other_pixi
+    local external_state_dir
     local -A seen_machine_ids=()
     machines_dir="${PIXIED_STATE_DIR}/machines"
     PIXIED_UNINSTALL_OTHER_STATE_COUNT=0
@@ -416,7 +454,8 @@ pixied_uninstall_scan_other_states() {
         expected=$(pixied_canonical_path "$machine_dir/state")
         [ "$candidate" = "$expected" ] ||
             pixied_die "machine state path is not canonical: $candidate"
-        [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
+        external_state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE[state_dir]}")
+        [ "$external_state_dir" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
         [ -z "${seen_machine_ids[${PIXIED_STATE[machine_id]}]+present}" ] ||
             pixied_die "duplicate machine state ID: ${PIXIED_STATE[machine_id]}"
@@ -429,64 +468,67 @@ pixied_uninstall_scan_other_states() {
         # An other state must be internally consistent before its shared-resource
         # claims can be trusted. Overlapping managed roots would make the
         # shared/non-shared classification ambiguous, so block cleanup.
-        if pixied_uninstall_paths_overlap "${PIXIED_STATE[data_dir]}" \
+        if pixied_uninstall_paths_overlap_external "${PIXIED_STATE[data_dir]}" \
             "${PIXIED_STATE[config_dir]}"; then
             pixied_die "machine state managed roots are inconsistent: $candidate"
         fi
-        if pixied_uninstall_paths_overlap "${PIXIED_STATE[data_dir]}" \
+        if pixied_uninstall_paths_overlap_external "${PIXIED_STATE[data_dir]}" \
             "${PIXIED_STATE[command_bin]}"; then
             pixied_die "machine state managed roots are inconsistent: $candidate"
         fi
-        if pixied_uninstall_paths_overlap "${PIXIED_STATE[config_dir]}" \
+        if pixied_uninstall_paths_overlap_external "${PIXIED_STATE[config_dir]}" \
             "${PIXIED_STATE[command_bin]}"; then
             pixied_die "machine state managed roots are inconsistent: $candidate"
         fi
         other_home_mode=${PIXIED_STATE[home_mode]}
-        other_local_home=$(pixied_canonical_path "${PIXIED_STATE[local_home]}")
-        other_data=$(pixied_canonical_path "${PIXIED_STATE[data_dir]}")
-        other_config=$(pixied_canonical_path "${PIXIED_STATE[config_dir]}")
+        other_local_home=${PIXIED_STATE[local_home]}
+        other_data=$(pixied_uninstall_external_root "${PIXIED_STATE[data_dir]}" \
+            "$other_home_mode" "$other_local_home")
+        other_config=$(pixied_uninstall_external_root "${PIXIED_STATE[config_dir]}" \
+            "$other_home_mode" "$other_local_home")
         other_command=$(pixied_canonical_path "${PIXIED_STATE[command_bin]}")
-        other_pixi=$(pixied_canonical_path "${PIXIED_STATE[pixi_home]}")
-        if ! pixied_uninstall_path_is_machine_local "$current_data" \
-            "$current_home_mode" "$current_local_home" &&
+        other_pixi=$(pixied_uninstall_external_root "${PIXIED_STATE[pixi_home]}" \
+            "$other_home_mode" "$other_local_home")
+        if [ -n "$other_data" ] &&
+            ! pixied_uninstall_path_is_machine_local "$current_data" \
+                "$current_home_mode" "$current_local_home" &&
             ! pixied_uninstall_path_is_machine_local "$other_data" \
                 "$other_home_mode" "$other_local_home" &&
             [ "$other_data" = "$current_data" ]; then
             PIXIED_UNINSTALL_SHARED_DATA=1
         fi
-        if ! pixied_uninstall_path_is_machine_local "$current_config" \
-            "$current_home_mode" "$current_local_home" &&
+        if [ -n "$other_config" ] &&
+            ! pixied_uninstall_path_is_machine_local "$current_config" \
+                "$current_home_mode" "$current_local_home" &&
             ! pixied_uninstall_path_is_machine_local "$other_config" \
                 "$other_home_mode" "$other_local_home" &&
             [ "$other_config" = "$current_config" ]; then
             PIXIED_UNINSTALL_SHARED_CONFIG=1
         fi
         [ "$other_command" = "$current_command" ] && PIXIED_UNINSTALL_SHARED_COMMAND=1
-        if ! pixied_uninstall_path_is_machine_local "$current_pixi" \
-            "$current_home_mode" "$current_local_home" &&
+        if [ -n "$other_pixi" ] &&
+            ! pixied_uninstall_path_is_machine_local "$current_pixi" \
+                "$current_home_mode" "$current_local_home" &&
             ! pixied_uninstall_path_is_machine_local "$other_pixi" \
                 "$other_home_mode" "$other_local_home" &&
             [ "$other_pixi" = "$current_pixi" ]; then
             PIXIED_UNINSTALL_SHARED_PIXI_HOME=1
         fi
-        if pixied_uninstall_path_is_machine_local "$other_data" \
-            "$other_home_mode" "$other_local_home"; then
-            PIXIED_UNINSTALL_OTHER_DATA+=("")
-        else
+        if [ -n "$other_data" ]; then
             PIXIED_UNINSTALL_OTHER_DATA+=("$other_data")
-        fi
-        if pixied_uninstall_path_is_machine_local "$other_config" \
-            "$other_home_mode" "$other_local_home"; then
-            PIXIED_UNINSTALL_OTHER_CONFIG+=("")
         else
+            PIXIED_UNINSTALL_OTHER_DATA+=("")
+        fi
+        if [ -n "$other_config" ]; then
             PIXIED_UNINSTALL_OTHER_CONFIG+=("$other_config")
+        else
+            PIXIED_UNINSTALL_OTHER_CONFIG+=("")
         fi
         PIXIED_UNINSTALL_OTHER_COMMAND+=("$other_command")
-        if pixied_uninstall_path_is_machine_local "$other_pixi" \
-            "$other_home_mode" "$other_local_home"; then
-            PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("")
-        else
+        if [ -n "$other_pixi" ]; then
             PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("$other_pixi")
+        else
+            PIXIED_UNINSTALL_OTHER_PIXI_HOME+=("")
         fi
         seen_machine_ids["${PIXIED_STATE[machine_id]}"]=1
         PIXIED_UNINSTALL_OTHER_STATE_COUNT=$((PIXIED_UNINSTALL_OTHER_STATE_COUNT + 1))
@@ -1058,6 +1100,7 @@ pixied_launcher_nfs_dispatcher_matches() {
 # @exitcode 1 When no trusted state records the launcher.
 pixied_launcher_adopt_shared() {
     local target=$1 machines_dir machine_dir candidate candidate_name expected actual key
+    local external_state_dir external_command_bin external_launcher
     local -A saved_state=()
     for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
         if pixied_state_has "$key"; then
@@ -1086,9 +1129,15 @@ pixied_launcher_adopt_shared() {
         pixied_state_load_external "$candidate"
         [ "${PIXIED_STATE[machine_id]}" = "$candidate_name" ] ||
             pixied_die "machine state ID does not match its directory: $candidate"
-        [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
+        external_state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE[state_dir]}")
+        [ "$external_state_dir" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
-        if [ "${PIXIED_STATE[launcher_path]:-}" = "$target" ] &&
+        external_command_bin=$(pixied_validate_canonical_path "${PIXIED_STATE[command_bin]}")
+        [ -n "${PIXIED_STATE[launcher_path]:-}" ] || continue
+        external_launcher=$(pixied_validate_canonical_path "${PIXIED_STATE[launcher_path]}")
+        [ "$external_launcher" = "$external_command_bin/pixied" ] ||
+            pixied_die "machine state launcher path is inconsistent: $candidate"
+        if [ "$external_launcher" = "$target" ] &&
             [ -n "${PIXIED_STATE[launcher_hash]:-}" ]; then
             if pixied_hash_matches "$target" "${PIXIED_STATE[launcher_hash]}"; then
                 pixied_validate_owned_path "$target" "${PIXIED_STATE[launcher_hash]}"

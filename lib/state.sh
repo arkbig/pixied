@@ -67,18 +67,21 @@ pixied_state_path_key() {
     esac
 }
 
-# @description Validate a state key and value pair.
+# @description Validate a state key and value for a validation profile.
 # Checks whether the key is known, whether the value contains a line break,
-# and the per-key format (version, ID, mode, flag, hash, or path).
+# and the per-key format (version, ID, mode, flag, hash, or path). Path values
+# are canonicalized only for the current-state profile; external state keeps
+# absolute path syntax validation while allowing another host's path aliases.
 #
-# @arg $1 string The state key
+# @arg $1 string The key to validate
 # @arg $2 string The value to validate
+# @arg $3 integer Whether path values must be canonical
 # @exitcode 0 When the validation succeeds
 # @exitcode 1 When the validation fails
 # @see pixied_state_known_key
 # @see pixied_machine_id_is_safe
-pixied_state_validate_value() {
-    local key=$1 value=${2-}
+pixied_state_validate_value_profile() {
+    local key=$1 value=${2-} require_canonical=${3:-1}
     pixied_state_known_key "$key" ||
         pixied_die "unknown state key: $key"
     case "$value" in
@@ -115,10 +118,40 @@ pixied_state_validate_value() {
     *)
         if pixied_state_path_key "$key"; then
             [ -n "$value" ] || pixied_die "state path is empty: $key"
-            pixied_validate_canonical_path "$value" >/dev/null
+            if [ "$require_canonical" -eq 1 ]; then
+                pixied_validate_canonical_path "$value" >/dev/null
+            else
+                pixied_require_absolute_path "$value"
+            fi
         fi
         ;;
     esac
+}
+
+# @description Validate a state key and value for the current machine.
+# Path values must be canonical and contain no symlink components.
+#
+# @arg $1 string The key to validate
+# @arg $2 string The value to validate
+# @exitcode 0 When the validation succeeds
+# @exitcode 1 When the validation fails
+# @see pixied_state_validate_value_profile
+pixied_state_validate_value() {
+    pixied_state_validate_value_profile "$1" "${2-}" 1
+}
+
+# @description Validate a state key and value from another machine.
+# Path values must be absolute and free of line breaks, but may retain the
+# machine-local spelling recorded by the other host until a consumer classifies
+# the path as shared or machine-local.
+#
+# @arg $1 string The key to validate
+# @arg $2 string The value to validate
+# @exitcode 0 When the validation succeeds
+# @exitcode 1 When the validation fails
+# @see pixied_state_validate_value_profile
+pixied_state_validate_external_value() {
+    pixied_state_validate_value_profile "$1" "${2-}" 0
 }
 
 # @description Clear and initialize the PIXIED_STATE associative array.
@@ -135,6 +168,19 @@ pixied_state_reset() {
 pixied_state_set() {
     local key=$1 value=${2-}
     pixied_state_validate_value "$key" "$value"
+    PIXIED_STATE["$key"]=$value
+}
+
+# @description Validate and set an external state value.
+#
+# @arg $1 string The state key
+# @arg $2 string The value to set
+# @exitcode 0 On success
+# @exitcode 1 When the validation fails
+# @see pixied_state_validate_external_value
+pixied_state_set_external() {
+    local key=$1 value=${2-}
+    pixied_state_validate_external_value "$key" "$value"
     PIXIED_STATE["$key"]=$value
 }
 
@@ -155,6 +201,43 @@ pixied_state_validate_legacy_value() {
         ;;
     *) return 1 ;;
     esac
+}
+
+# @description Validate a removed state key from another machine.
+# The legacy key is accepted with external path syntax rules and is discarded.
+#
+# @arg $1 string The legacy state key
+# @arg $2 string The value to validate
+# @exitcode 0 When the legacy value is valid
+# @exitcode 1 When the key is not a supported legacy key
+pixied_state_validate_external_legacy_value() {
+    local key=$1 value=${2-}
+    case "$key" in
+    sync_baseline)
+        [ -n "$value" ] || pixied_die "state path is empty: $key"
+        pixied_require_absolute_path "$value"
+        ;;
+    *) return 1 ;;
+    esac
+}
+
+# @description Check whether an external state path is machine-local in NFS mode.
+# This is a lexical classification performed before any current-host path
+# resolution. It intentionally preserves another host's local-home alias.
+#
+# @arg $1 string The path to classify
+# @arg $2 string The recorded home mode
+# @arg $3 string The recorded local home
+# @exitcode 0 When the path is below the recorded NFS local home
+# @exitcode 1 Otherwise
+pixied_state_path_is_machine_local() {
+    local path=$1 home_mode=$2 local_home=$3
+    [ "$home_mode" = nfs ] || return 1
+    [ -n "$local_home" ] || return 1
+    case "$path/" in
+    "$local_home/"*) return 0 ;;
+    esac
+    return 1
 }
 
 # @description Check whether the given state key exists in PIXIED_STATE.
@@ -188,9 +271,9 @@ pixied_state_require_core() {
     done
 }
 
-# @description Validate the state structure without binding it to this process.
-# Checks that the core keys exist and every value uses an allowed format. This
-# is used when inspecting another machine's state as shared-resource evidence.
+# @description Validate the current-state structure without binding it to this process.
+# Checks that the core keys exist and every value uses the strict current-state
+# format, including canonical managed paths.
 #
 # @exitcode 0 When the state structure is valid.
 # @exitcode 1 When the state structure is invalid.
@@ -200,6 +283,22 @@ pixied_state_validate_structure() {
     pixied_state_require_core
     for key in "${!PIXIED_STATE[@]}"; do
         pixied_state_validate_value "$key" "${PIXIED_STATE[$key]}"
+    done
+}
+
+# @description Validate the structure of an external machine state.
+# Core values and scalar formats remain strict, while path values use the
+# external profile until a consumer decides whether each path is shared.
+#
+# @exitcode 0 When the external state structure is valid.
+# @exitcode 1 When the external state structure is invalid.
+# @see pixied_state_require_core
+# @see pixied_state_validate_external_value
+pixied_state_validate_external_structure() {
+    local key
+    pixied_state_require_core
+    for key in "${!PIXIED_STATE[@]}"; do
+        pixied_state_validate_external_value "$key" "${PIXIED_STATE[$key]}"
     done
 }
 
@@ -382,8 +481,13 @@ pixied_state_require_lock() {
 # @exitcode 0 When all state lines are parsed successfully
 # @exitcode 1 When parsing or validation fails
 pixied_state_load_file() {
-    local state_file=$1 error_label=${2:-state} line key value
+    local state_file=$1 error_label=${2:-state} validation_profile=${3:-current}
+    local line key value
     local sync_baseline_seen=0
+    case "$validation_profile" in
+    current | external) ;;
+    *) pixied_die "invalid state validation profile: $validation_profile" ;;
+    esac
     pixied_state_reset
     while IFS= read -r line || [ -n "$line" ]; do
         [ -n "$line" ] || pixied_die "malformed $error_label line"
@@ -396,13 +500,21 @@ pixied_state_load_file() {
         case "$key" in
         sync_baseline)
             [ "$sync_baseline_seen" -eq 0 ] || pixied_die "duplicate state key: $key"
-            pixied_state_validate_legacy_value "$key" "$value"
+            if [ "$validation_profile" = external ]; then
+                pixied_state_validate_external_legacy_value "$key" "$value"
+            else
+                pixied_state_validate_legacy_value "$key" "$value"
+            fi
             sync_baseline_seen=1
             ;;
         *)
             pixied_state_known_key "$key" || pixied_die "unknown state key: $key"
             pixied_state_has "$key" && pixied_die "duplicate state key: $key"
-            pixied_state_set "$key" "$value"
+            if [ "$validation_profile" = external ]; then
+                pixied_state_set_external "$key" "$value"
+            else
+                pixied_state_set "$key" "$value"
+            fi
             ;;
         esac
     done <"$state_file"
@@ -427,9 +539,9 @@ pixied_state_load() {
 }
 
 # @description Load and validate a state file without current identity checks.
-# The file and all values remain subject to ownership, canonical-path, format,
-# and machine-ID validation, but its account home and machine ID may differ from
-# the current process because it describes another machine.
+# The state file and scalar values remain subject to ownership, format, and
+# machine-ID validation. Path values use external syntax validation until a
+# consumer classifies them as shared or machine-local.
 #
 # @arg $1 string The state file path.
 # @set PIXIED_STATE assoc The loaded external state.
@@ -440,7 +552,26 @@ pixied_state_load_external() {
     [ -n "$state_file" ] || pixied_die "external state file path is not set"
     pixied_validate_owned_path "$state_file"
     [ -f "$state_file" ] || pixied_die "external state is not a regular file: $state_file"
-    pixied_state_load_file "$state_file" 'external state'
+    pixied_state_load_file "$state_file" 'external state' external
+    pixied_state_validate_external_structure
+}
+
+# @description Load a verified state file with the current-state path profile.
+# Unlike external state, every managed path must already be canonical. Identity
+# matching is left to the caller so active runtime bootstrap can validate the
+# state-file directory before exporting the loaded identity.
+#
+# @arg $1 string The state file path.
+# @set PIXIED_STATE assoc The loaded verified state.
+# @exitcode 0 When the state loads and validates.
+# @exitcode 1 When load or validation fails.
+# @see pixied_state_validate_structure
+pixied_state_load_verified() {
+    local state_file=${1:-}
+    [ -n "$state_file" ] || pixied_die "verified state file path is not set"
+    pixied_validate_owned_path "$state_file"
+    [ -f "$state_file" ] || pixied_die "verified state is not a regular file: $state_file"
+    pixied_state_load_file "$state_file" state current
     pixied_state_validate_structure
 }
 
@@ -475,7 +606,7 @@ pixied_state_serialize() {
 pixied_state_load_active() {
     local serialized line key value
     serialized=$(
-        if pixied_state_load_external "$1"; then
+        if pixied_state_load_verified "$1"; then
             pixied_state_serialize
         else
             exit 1
@@ -607,7 +738,7 @@ pixied_state_active_runtime_error() {
 # @set PIXIED_MACHINE_STATE_DIR string Verified machine state directory
 # @exitcode 0 Non-active or active-verified
 # @exitcode 1 Active but missing or invalid
-# @see pixied_state_load_external
+# @see pixied_state_load_verified
 # @see pixied_state_active_runtime_error
 pixied_state_bootstrap_active_runtime() {
     PIXIED_ACTIVE_RUNTIME=0

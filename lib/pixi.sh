@@ -251,13 +251,7 @@ pixied_pixi_extract_binary() {
 # @exitcode 0 When the path is machine-local in NFS mode.
 # @exitcode 1 Otherwise.
 pixied_pixi_path_is_machine_local() {
-    local path=$1 local_home=$2 home_mode=$3
-    [ "$home_mode" = nfs ] || return 1
-    [ -n "$local_home" ] || return 1
-    case "$path/" in
-    "$local_home/"*) return 0 ;;
-    esac
-    return 1
+    pixied_state_path_is_machine_local "$1" "$3" "$2"
 }
 
 # @description Check whether another machine state records the current Pixi home.
@@ -268,6 +262,7 @@ pixied_pixi_path_is_machine_local() {
 # @exitcode 1 When no other machine records the current Pixi home.
 pixied_pixi_home_is_recorded_by_other_state() {
     local machines_dir machine_dir candidate candidate_name expected key found=1
+    local external_state_dir external_pixi_home
     local -A saved_state=()
     for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
         if pixied_state_has "$key"; then
@@ -296,7 +291,8 @@ pixied_pixi_home_is_recorded_by_other_state() {
         pixied_state_load_external "$candidate"
         [ "${PIXIED_STATE[machine_id]}" = "$candidate_name" ] ||
             pixied_die "machine state ID does not match its directory: $candidate"
-        [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
+        external_state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE[state_dir]}")
+        [ "$external_state_dir" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
         if pixied_pixi_path_is_machine_local "$PIXIED_PIXI_HOME" \
             "${PIXIED_LOCAL_HOME:-}" "${PIXIED_HOME_MODE:-}" &&
@@ -304,7 +300,8 @@ pixied_pixi_home_is_recorded_by_other_state() {
                 "${PIXIED_STATE[local_home]:-}" "${PIXIED_STATE[home_mode]:-}"; then
             continue
         fi
-        if [ "${PIXIED_STATE[pixi_home]:-}" = "$PIXIED_PIXI_HOME" ]; then
+        external_pixi_home=$(pixied_validate_canonical_path "${PIXIED_STATE[pixi_home]}")
+        if [ "$external_pixi_home" = "$PIXIED_PIXI_HOME" ]; then
             found=0
             break
         fi
@@ -356,6 +353,7 @@ pixied_pixi_validate_home_boundary() {
 pixied_pixi_adopt_shared_binary() {
     local target=$1 machines_dir machine_dir candidate candidate_name expected actual key
     local shared_created_data shared_created_pixi_home shared_pixi_home
+    local external_state_dir external_binary
     local -A saved_state=()
     for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
         if pixied_state_has "$key"; then
@@ -384,15 +382,22 @@ pixied_pixi_adopt_shared_binary() {
         pixied_state_load_external "$candidate"
         [ "${PIXIED_STATE[machine_id]}" = "$candidate_name" ] ||
             pixied_die "machine state ID does not match its directory: $candidate"
-        [ "${PIXIED_STATE[state_dir]}" = "$PIXIED_STATE_DIR" ] ||
+        external_state_dir=$(pixied_validate_canonical_path "${PIXIED_STATE[state_dir]}")
+        [ "$external_state_dir" = "$PIXIED_STATE_DIR" ] ||
             pixied_die "machine state uses a different state directory: $candidate"
+        [ -n "${PIXIED_STATE[pixi_binary_path]:-}" ] || continue
+        if pixied_pixi_path_is_machine_local "${PIXIED_STATE[pixi_binary_path]}" \
+            "${PIXIED_STATE[local_home]:-}" "${PIXIED_STATE[home_mode]:-}"; then
+            continue
+        fi
+        external_binary=$(pixied_validate_canonical_path "${PIXIED_STATE[pixi_binary_path]}")
         if pixied_pixi_path_is_machine_local "$target" \
             "${PIXIED_LOCAL_HOME:-}" "${PIXIED_HOME_MODE:-}" &&
             pixied_pixi_path_is_machine_local "$target" \
                 "${PIXIED_STATE[local_home]:-}" "${PIXIED_STATE[home_mode]:-}"; then
             continue
         fi
-        if [ "${PIXIED_STATE[pixi_binary_path]:-}" = "$target" ] &&
+        if [ "$external_binary" = "$target" ] &&
             [ -n "${PIXIED_STATE[pixi_binary_hash]:-}" ] &&
             pixied_hash_matches "$target" "${PIXIED_STATE[pixi_binary_hash]}"; then
             pixied_validate_owned_path "$target" "${PIXIED_STATE[pixi_binary_hash]}"
@@ -400,6 +405,12 @@ pixied_pixi_adopt_shared_binary() {
             shared_created_data=${PIXIED_STATE[created_data]:-0}
             shared_created_pixi_home=${PIXIED_STATE[created_pixi_home]:-0}
             shared_pixi_home=${PIXIED_STATE[pixi_home]:-}
+            if pixied_pixi_path_is_machine_local "$shared_pixi_home" \
+                "${PIXIED_STATE[local_home]:-}" "${PIXIED_STATE[home_mode]:-}"; then
+                shared_pixi_home=""
+            else
+                shared_pixi_home=$(pixied_validate_canonical_path "$shared_pixi_home")
+            fi
             PIXIED_STATE=()
             for key in "${PIXIED_STATE_KEY_ORDER[@]}"; do
                 if [ "${saved_state[$key]+present}" = present ]; then

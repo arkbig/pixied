@@ -1153,6 +1153,154 @@ PYPROJECT
     fi
 }
 
+@test "NFS dispatcher installs with peer machine-local symlink paths" {
+    local account_home="$PIXIED_TEST_ROOT/dispatcher-peer-account"
+    local physical_root="$PIXIED_TEST_ROOT/dispatcher-peer-physical"
+    local alias_root="$PIXIED_TEST_ROOT/dispatcher-peer-alias"
+    local current_physical_root="$PIXIED_TEST_ROOT/dispatcher-current-physical"
+    local current_alias_root="$PIXIED_TEST_ROOT/dispatcher-current-alias"
+    local peer_home="$physical_root/peer-user"
+    local alias_home="$alias_root/peer-user"
+    local current_home="$current_physical_root/current-user"
+    local current_alias_home="$current_alias_root/current-user"
+    local state="$PIXIED_TEST_ROOT/dispatcher-peer-state"
+    local peer_id=dispatcher-peer
+    local current_id=dispatcher-current
+    local peer_state current_state launcher
+    local fake_pixi="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    mkdir -p "$account_home" "$peer_home" "$current_home"
+    ln -s "$physical_root" "$alias_root"
+    ln -s "$current_physical_root" "$current_alias_root"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER=peer-user \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$peer_home" --session-manager none \
+        --machine-id "$peer_id" --yes
+    assert_success
+
+    peer_state="$state/pixied/machines/$peer_id/state"
+    launcher="$account_home/.local/bin/pixied"
+    [ -f "$peer_state" ] || pixied_test_fail "peer state is missing"
+    [ -x "$launcher" ] || pixied_test_fail "NFS dispatcher launcher is missing"
+    sed -i \
+        -e "s|^local_home=.*|local_home=$alias_home|" \
+        -e "s|^data_dir=.*|data_dir=$alias_home/.local/share/pixied|" \
+        -e "s|^config_dir=.*|config_dir=$alias_home/.config/pixied|" \
+        -e "s|^pixi_home=.*|pixi_home=$alias_home/.local/share/pixied/pixi|" \
+        -e "s|^pixi_binary_path=.*|pixi_binary_path=$alias_home/.local/share/pixied/bin/pixi|" \
+        -e "s|^runtime_hook_path=.*|runtime_hook_path=$alias_home/.config/pixied/runtime-hook.bash|" \
+        "$peer_state"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER=current-user \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$launcher" install --local-home "$current_alias_home" \
+        --session-manager none --machine-id "$current_id" --yes
+    assert_success
+
+    current_state="$state/pixied/machines/$current_id/state"
+    [ -f "$current_state" ] || pixied_test_fail "current state is missing"
+    assert_equal "$current_home" \
+        "$(sed -n 's/^local_home=//p' "$current_state")"
+    assert_equal "$current_home/.local/share/pixied" \
+        "$(sed -n 's/^data_dir=//p' "$current_state")"
+    assert_equal "$current_home/.config/pixied" \
+        "$(sed -n 's/^config_dir=//p' "$current_state")"
+    assert_equal "$current_home/.local/share/pixied/pixi" \
+        "$(sed -n 's/^pixi_home=//p' "$current_state")"
+    if grep -Fq -- "$alias_home" "$current_state" ||
+        grep -Fq -- "$current_alias_home" "$current_state"; then
+        pixied_test_fail "current state persisted the peer symlink alias"
+    fi
+    [ -f "$peer_state" ] || pixied_test_fail "peer state was removed during dispatch"
+    [ -f "$peer_home/.local/share/pixied/bin/pixied" ] ||
+        pixied_test_fail "peer machine-local payload was removed during dispatch"
+    assert_equal 1 "$(sed -n 's/^created_pixi_home=//p' "$current_state")"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER=current-user \
+        XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs \
+        PIXIED_LOCAL_HOME="$current_alias_home" PIXIED_MACHINE_ID="$current_id" \
+        bash -c '
+        . "$1/lib/common.sh"
+        . "$1/lib/paths.sh"
+        . "$1/lib/state.sh"
+        . "$1/lib/pixi.sh"
+        pixied_resolve_paths
+        pixied_state_load
+        if pixied_pixi_home_is_recorded_by_other_state; then
+            printf "foreign machine-local Pixi home was adopted\n"
+            exit 1
+        fi
+        printf "foreign machine-local Pixi home was ignored\n"
+    ' bash "$PIXIED_REPO_ROOT"
+    assert_success
+    assert_output --partial 'foreign machine-local Pixi home was ignored'
+}
+
+@test "NFS dispatcher uninstall preserves peer machine-local symlink paths" {
+    local account_home="$PIXIED_TEST_ROOT/dispatcher-uninstall-account"
+    local physical_root="$PIXIED_TEST_ROOT/dispatcher-uninstall-physical"
+    local alias_root="$PIXIED_TEST_ROOT/dispatcher-uninstall-alias"
+    local current_physical_root="$PIXIED_TEST_ROOT/dispatcher-uninstall-current"
+    local current_alias_root="$PIXIED_TEST_ROOT/dispatcher-uninstall-current-alias"
+    local peer_home="$physical_root/peer-user"
+    local alias_home="$alias_root/peer-user"
+    local current_home="$current_physical_root/current-user"
+    local current_alias_home="$current_alias_root/current-user"
+    local state="$PIXIED_TEST_ROOT/dispatcher-uninstall-state"
+    local peer_id=dispatcher-uninstall-peer
+    local current_id=dispatcher-uninstall-current
+    local peer_state current_state launcher
+    local fake_pixi="$PIXIED_REPO_ROOT/tests/fakes/pixi"
+    mkdir -p "$account_home" "$peer_home" "$current_home"
+    ln -s "$physical_root" "$alias_root"
+    ln -s "$current_physical_root" "$current_alias_root"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER=peer-user \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
+        --local-home "$peer_home" --session-manager none \
+        --machine-id "$peer_id" --yes
+    assert_success
+
+    peer_state="$state/pixied/machines/$peer_id/state"
+    launcher="$account_home/.local/bin/pixied"
+    [ -f "$peer_state" ] || pixied_test_fail "peer state is missing"
+    sed -i \
+        -e "s|^local_home=.*|local_home=$alias_home|" \
+        -e "s|^data_dir=.*|data_dir=$alias_home/.local/share/pixied|" \
+        -e "s|^config_dir=.*|config_dir=$alias_home/.config/pixied|" \
+        -e "s|^pixi_home=.*|pixi_home=$alias_home/.local/share/pixied/pixi|" \
+        -e "s|^pixi_binary_path=.*|pixi_binary_path=$alias_home/.local/share/pixied/bin/pixi|" \
+        -e "s|^runtime_hook_path=.*|runtime_hook_path=$alias_home/.config/pixied/runtime-hook.bash|" \
+        "$peer_state"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER=current-user \
+        XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
+        bash "$launcher" install --local-home "$current_alias_home" \
+        --session-manager none --machine-id "$current_id" --yes
+    assert_success
+    current_state="$state/pixied/machines/$current_id/state"
+    [ -f "$current_state" ] || pixied_test_fail "current state is missing"
+    [ -d "$current_home/.local/share/pixied" ] ||
+        pixied_test_fail "current machine-local payload is missing before uninstall"
+
+    run env -i PATH="$PATH" HOME="$account_home" USER=current-user \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$current_id" \
+        bash "$launcher" uninstall --yes
+    assert_success
+    [ ! -e "$current_state" ] || pixied_test_fail "current state remains after uninstall"
+    [ ! -e "$current_home/.local/share/pixied" ] ||
+        pixied_test_fail "current machine-local payload remains after uninstall"
+    [ -f "$peer_state" ] || pixied_test_fail "peer state was removed during uninstall"
+    [ -f "$peer_home/.local/share/pixied/bin/pixied" ] ||
+        pixied_test_fail "peer machine-local payload was removed during uninstall"
+    [ -f "$account_home/.local/bin/pixied" ] ||
+        pixied_test_fail "shared dispatcher was removed while peer state remained"
+    [ -d "$state/pixied/release-store" ] ||
+        pixied_test_fail "shared release store was removed while peer state remained"
+}
+
 @test "NFS source install keeps an auto-detected machine ID for release metadata" {
     local account_home="$PIXIED_TEST_ROOT/nfs-auto-machine-account"
     local local_home="$PIXIED_TEST_ROOT/nfs-auto-machine-local"
@@ -2888,6 +3036,54 @@ CURL
     [ -f "$state/pixied/machines/phase6-hash/state" ] || pixied_test_fail "state was removed after hash mismatch"
     [ -d "$data/pixied" ] || pixied_test_fail "data was removed after hash mismatch"
     [ ! -e "$state/pixied/.lock" ] || pixied_test_fail "state lock was left behind"
+}
+
+@test "reinstall repairs a modified runtime hook before forced uninstall" {
+    local home="$PIXIED_TEST_ROOT/phase6-hook-recovery-home"
+    local data="$PIXIED_TEST_ROOT/phase6-hook-recovery-data"
+    local config="$PIXIED_TEST_ROOT/phase6-hook-recovery-config"
+    local state="$PIXIED_TEST_ROOT/phase6-hook-recovery-state"
+    local state_file="$state/pixied/machines/phase6-hook-recovery/state"
+    local runtime_hook="$config/pixied/runtime-hook.bash"
+    local repaired_hash recorded_hash
+    mkdir -p "$home"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hook-recovery \
+        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
+    assert_success
+    printf '\nmodified by test\n' >>"$runtime_hook"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hook-recovery \
+        PIXIED_HOME_MODE=local bash "$data/pixied/bin/pixied" uninstall --yes --force
+    assert_failure 1
+    assert_output --partial 'managed path hash does not match'
+    assert_output --partial "run 'pixied install' to regenerate the managed runtime hook"
+    [ -f "$state_file" ] || pixied_test_fail "forced uninstall removed state after hook tampering"
+    [ -f "$runtime_hook" ] || pixied_test_fail "forced uninstall removed the modified hook"
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hook-recovery \
+        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$data/pixied/bin/pixied" install --yes
+    assert_success
+    repaired_hash=$(sha256sum "$runtime_hook" | cut -d' ' -f1)
+    recorded_hash=$(sed -n 's/^runtime_hook_hash=//p' "$state_file")
+    assert_equal "$repaired_hash" "$recorded_hash"
+    if grep -Fq -- 'modified by test' "$runtime_hook"; then
+        pixied_test_fail "reinstall retained the modified runtime hook"
+    fi
+
+    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hook-recovery \
+        PIXIED_HOME_MODE=local bash "$data/pixied/bin/pixied" uninstall --yes
+    assert_success
+    [ ! -e "$state_file" ] || pixied_test_fail "uninstall left repaired state behind"
+    [ ! -e "$runtime_hook" ] || pixied_test_fail "uninstall left repaired hook behind"
 }
 
 # US-107-1

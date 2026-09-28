@@ -229,7 +229,7 @@ pixied_version_load_nfs_state() {
     fi
     PIXIED_VERSION_STATE_STATUS=unavailable
     if serialized=$(
-        pixied_state_load_external "$state_file"
+        pixied_state_load_verified "$state_file"
         pixied_state_serialize
     ) 2>/dev/null; then
         pixied_state_reset
