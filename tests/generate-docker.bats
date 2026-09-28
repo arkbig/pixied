@@ -70,15 +70,39 @@ assert_output() {
 # @arg $1 string Test name used to derive unique directories and image tag.
 # @stdout "project tag" on success (caller reads via $output or inline).
 generate_devcontainer_for_test() {
-    local name=$1
+    local name=$1 fixture=${2:-pixi}
     local cli="$PIXIED_REPO_ROOT/bin/pixied"
     local home="$PIXIED_TEST_ROOT/${name}-home"
     local project="$PIXIED_TEST_ROOT/${name}-project"
     local tag="pixied-test-${name}"
     mkdir -p "$home" "$project"
-    printf '[workspace]\nname = "sample"\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n' >"$project/pixi.toml"
+    case "$fixture" in
+    pixi)
+        printf '[workspace]\nname = "sample"\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n' >"$project/pixi.toml"
+        ;;
+    pyproject)
+        cat >"$project/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "sample"
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+PYPROJECT
+        ;;
+    lock)
+        printf 'version\n1.2.3\n' >"$project/pixi.lock"
+        ;;
+    pixi-lock)
+        command -v pixi >/dev/null 2>&1 || skip "pixi is not available to create a lockfile fixture"
+        printf '[workspace]\nname = "sample"\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n' >"$project/pixi.toml"
+        (cd "$project" && pixi lock >/dev/null 2>&1)
+        ;;
+    empty) ;;
+    *) return 1 ;;
+    esac
     env HOME="$home" bash -c \
         'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
+    "$project/.devcontainer/generate-env.sh"
     printf '%s\n%s\n' "$project" "$tag"
 }
 
@@ -133,8 +157,8 @@ generate_devcontainer_for_test() {
     assert_output --partial 'is missing'
 }
 
-# PXD-010: the Dev Container Dockerfile must build whether or not pixi.toml /
-# pixi.lock are present, because the COPY uses wildcards (pixi.tom[l] pixi.loc[k]).
+# PXD-010: the Dev Container Dockerfile must build for supported manifest,
+# lockfile, and manifest-free input states.
 @test "generate devcontainer builds with only pixi.toml (no lock)" {
     command -v docker >/dev/null 2>&1 || skip "docker is not available"
     local project tag
@@ -148,14 +172,41 @@ generate_devcontainer_for_test() {
     assert_success
 }
 
+@test "generate devcontainer builds with only pyproject.toml" {
+    command -v docker >/dev/null 2>&1 || skip "docker is not available"
+    local project tag
+    project=$(generate_devcontainer_for_test pyprojectonly pyproject | sed -n '1p')
+    tag=pixied-test-pyprojectonly
+    trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
+    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
+
+    run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
+    assert_success
+}
+
+@test "generate devcontainer builds with a locked manifest" {
+    command -v docker >/dev/null 2>&1 || skip "docker is not available"
+    local project tag
+    project=$(generate_devcontainer_for_test locked pixi-lock | sed -n '1p')
+    tag=pixied-test-locked
+    trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
+    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
+
+    grep -Fq -- 'COPY pixi.toml pixi.lock ./' "$project/.devcontainer/Dockerfile" ||
+        pixied_test_fail "locked fixture does not use a direct manifest and lock COPY"
+    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --locked' \
+        "$project/.devcontainer/Dockerfile" ||
+        pixied_test_fail "locked fixture does not use pixi install --locked"
+    run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
+    assert_success
+}
+
 @test "generate devcontainer builds with only pixi.lock (no toml)" {
     command -v docker >/dev/null 2>&1 || skip "docker is not available"
     local project tag
-    project=$(generate_devcontainer_for_test lockonly | sed -n '1p')
+    project=$(generate_devcontainer_for_test lockonly lock | sed -n '1p')
     tag=pixied-test-lockonly
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf 'version\n1.2.3\n' >"$project/pixi.lock"
-    rm -f -- "$project/pixi.toml"
     printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
 
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
@@ -165,10 +216,9 @@ generate_devcontainer_for_test() {
 @test "generate devcontainer builds with neither pixi.toml nor pixi.lock" {
     command -v docker >/dev/null 2>&1 || skip "docker is not available"
     local project tag
-    project=$(generate_devcontainer_for_test neither | sed -n '1p')
+    project=$(generate_devcontainer_for_test neither empty | sed -n '1p')
     tag=pixied-test-neither
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    rm -f -- "$project/pixi.toml" "$project/pixi.lock"
     printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
 
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
