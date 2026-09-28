@@ -745,8 +745,9 @@ ENV_EXAMPLE
 }
 
 # @description Return the executable script that materializes .env.example.
-# The script accepts assignment-only templates, evaluates their right-hand
-# sides with Bash, and atomically replaces the local .env file.
+# The script accepts assignment-only templates, preserves their comments and
+# spacing, evaluates their right-hand sides with Bash, and atomically replaces
+# the local .env file.
 #
 # @stdout The generated generate-env.sh content.
 # @exitcode 0 Always.
@@ -783,14 +784,20 @@ skip_command_substitution() {
                 ;;
             '"')
                 case "$char" in
-                \\) index=$((index + 2)); continue ;;
+                \\)
+                    index=$((index + 2))
+                    continue
+                    ;;
                 '"') quote= ;;
                 esac
                 ;;
             esac
         else
             case "$char" in
-            \\) index=$((index + 2)); continue ;;
+            \\)
+                index=$((index + 2))
+                continue
+                ;;
             "'") quote="'" ;;
             '"') quote='"' ;;
             '(') depth=$((depth + 1)) ;;
@@ -817,6 +824,8 @@ skip_command_substitution() {
 
 validate_rhs() {
     local rhs=$1 index=0 quote='' char next
+    __pixied_rhs=$rhs
+    __pixied_suffix=
     while [ "$index" -lt "${#rhs}" ]; do
         char=${rhs:index:1}
         if [ -n "$quote" ]; then
@@ -826,7 +835,10 @@ validate_rhs() {
                 ;;
             '"')
                 case "$char" in
-                \\) index=$((index + 2)); continue ;;
+                \\)
+                    index=$((index + 2))
+                    continue
+                    ;;
                 '"') quote= ;;
                 '$')
                     next=${rhs:$((index + 1)):1}
@@ -842,9 +854,20 @@ validate_rhs() {
             esac
         else
             case "$char" in
-            \\) index=$((index + 2)); continue ;;
+            \\)
+                index=$((index + 2))
+                continue
+                ;;
             "'") quote="'" ;;
             '"') quote='"' ;;
+            [[:space:]])
+                if [[ ${rhs:index} =~ ^[[:space:]]*(#.*)?$ ]]; then
+                    __pixied_rhs=${rhs:0:index}
+                    __pixied_suffix=${rhs:index}
+                    return 0
+                fi
+                return 1
+                ;;
             '$')
                 next=${rhs:$((index + 1)):1}
                 if [ "$next" = '(' ]; then
@@ -853,7 +876,7 @@ validate_rhs() {
                     continue
                 fi
                 ;;
-            '`' | ' ' | $'\t' | ';' | '&' | '|' | '<' | '>') return 1 ;;
+            '`' | ';' | '&' | '|' | '<' | '>') return 1 ;;
             esac
         fi
         index=$((index + 1))
@@ -868,17 +891,13 @@ evaluate_assignment() {
         set -Eeuo pipefail
         source "$1"
         eval "$2"
-        if [[ "$(declare -p "$3" 2>/dev/null)" == "declare -x "* ]]; then
-            printf "export %s=%q\\n" "$3" "${!3}"
-        else
-            printf "%s=%q\\n" "$3" "${!3}"
-        fi
+        printf "%q\\n" "${!3}"
     ' -- "$temporary" "$__pixied_assignment" "$__pixied_name"); then
         printf 'generate-env: failed to evaluate assignment at line %s\n' \
             "$__pixied_line" >&2
         return 1
     fi
-    printf '%s\n' "$__pixied_value" >>"$temporary"
+    printf '%s' "$__pixied_value"
 }
 
 line_number=0
@@ -886,16 +905,14 @@ while IFS= read -r line || [ -n "$line" ]; do
     line_number=$((line_number + 1))
     if [[ "$line" =~ ^[[:space:]]*$ ]] ||
         [[ "$line" =~ ^[[:space:]]*# ]]; then
+        printf '%s\n' "$line" >>"$temporary"
         continue
     fi
-    if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$ ]]; then
-        name=${BASH_REMATCH[2]}
-        rhs=${BASH_REMATCH[3]}
-        if [ -n "${BASH_REMATCH[1]}" ]; then
-            assignment="export $name=$rhs"
-        else
-            assignment="$name=$rhs"
-        fi
+    if [[ "$line" =~ ^([[:space:]]*)(export[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$ ]]; then
+        indent=${BASH_REMATCH[1]}
+        export_prefix=${BASH_REMATCH[2]}
+        name=${BASH_REMATCH[3]}
+        rhs=${BASH_REMATCH[4]}
     else
         printf 'generate-env: invalid assignment at line %s\n' "$line_number" >&2
         exit 1
@@ -904,7 +921,16 @@ while IFS= read -r line || [ -n "$line" ]; do
         printf 'generate-env: invalid assignment at line %s\n' "$line_number" >&2
         exit 1
     fi
-    evaluate_assignment "$assignment" "$name" "$line_number"
+    if [ -n "$export_prefix" ]; then
+        assignment="export $name=$__pixied_rhs"
+    else
+        assignment="$name=$__pixied_rhs"
+    fi
+    if ! value=$(evaluate_assignment "$assignment" "$name" "$line_number"); then
+        exit 1
+    fi
+    printf '%s%s%s=%s%s\n' "$indent" "$export_prefix" "$name" "$value" \
+        "$__pixied_suffix" >>"$temporary"
 done <"$template"
 
 trap - EXIT

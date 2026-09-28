@@ -519,6 +519,7 @@ PYPROJECT
     local home="$PIXIED_TEST_ROOT/env-template-home"
     local project="$PIXIED_TEST_ROOT/env-template-project"
     local env_dir="$project/.devcontainer"
+    local expected_env="$env_dir/expected.env"
     mkdir -p "$home" "$project"
     printf '[workspace]\nname = "sample"\n' >"$project/pixi.toml"
 
@@ -529,8 +530,14 @@ PYPROJECT
         pixied_test_fail "generate devcontainer eagerly created .env"
     run bash -n "$env_dir/generate-env.sh"
     assert_success
-    printf 'export PROJECT_NAME="pixied"\nPROJECT_VALUE=$(printf "ready")\nPROJECT_NUMBER=$((2 + 3))\n' \
-        >"$env_dir/.env.example"
+    cat >"$env_dir/.env.example" <<'ENV_TEMPLATE'
+# Project settings
+export PROJECT_NAME="pixied" # Project label
+
+PROJECT_VALUE=$(printf "ready") # Generated on the host
+PROJECT_LABEL="pixied # stable" # Literal hash
+PROJECT_NUMBER=$((2 + 3)) # Arithmetic value
+ENV_TEMPLATE
     run bash "$env_dir/generate-env.sh"
     assert_success
     grep -Fq -- 'PROJECT_NAME=pixied' "$env_dir/.env" ||
@@ -541,6 +548,16 @@ PYPROJECT
         pixied_test_fail "arithmetic substitution was not materialized"
     [ "$(stat -c %a "$env_dir/.env")" = 600 ] ||
         pixied_test_fail "generated .env does not have mode 0600"
+    cat >"$expected_env" <<'ENV_OUTPUT'
+# Project settings
+export PROJECT_NAME=pixied # Project label
+
+PROJECT_VALUE=ready # Generated on the host
+PROJECT_LABEL=pixied\ #\ stable # Literal hash
+PROJECT_NUMBER=5 # Arithmetic value
+ENV_OUTPUT
+    cmp -s "$expected_env" "$env_dir/.env" ||
+        pixied_test_fail "generated .env did not preserve the template layout"
 
     printf 'KEEP_LOCAL_ENV=1\n' >"$env_dir/.env"
     printf 'echo forbidden\n' >"$env_dir/.env.example"
