@@ -52,12 +52,12 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 - NFS modeの同期対象が8つのshell設定ファイルに限定され、起動時に`account→local`の一方向`reconcile`だけが行われる。
 - Zellijを選択した場合、`pixied shell`で既存セッションへ再接続するか、初回セッションを作成できる。
 - `pixied generate direnv`で、プロジェクトディレクトリに入ったときだけPixiEdenの専用Pixi上のプロジェクト環境を有効化できる。生成された`.envrc`は`pixied generate direnv --print-envrc`を評価し、runtime hookまたは`pixied shell`/`pixied run`のPATHを使い、それ以外では生成時のCLI絶対pathを使う。hookの評価だけではNFS同期やsession起動を行わない。
-- `pixied generate devcontainer`または`dockerfile`で、同じプロジェクトPixi環境をコンテナ内に構築できる。definitionは`pixi.toml`を優先し、なければ`pyproject.toml`を使い、lockfileはoptionalとする。既定では`generate devcontainer`/`generate dockerfile`は共有生成物を上書きせずエラーで終了し、`--force`で上書き（`<name>.bak`へ1世代backup）する。definitionとlockfileがないDevContainerはfallback`COPY`と`pixi init`を使い、lockfileだけの入力もDevContainer専用として扱う。`pyproject.toml`を使うDevContainerは、必要なproject fileをworkspace mount後に参照できるようDockerfile build中の`pixi install`を省略し、`postCreateCommand`で常に`pixi install`を実行する。install後は`pixi shell-hook --manifest-path /workspace/<project manifest>`を`~/.bashrc`へ追記し、DockerfileではPixi環境用のPATHを設定しない。`.env.example`はproject固有設定を追加できるtemplateであり、DevContainerの`initializeCommand`またはDocker CLI利用者が先に実行する`generate-env.sh`によってbuild前にhost-localな`.env`へmaterializeされる。この`.env`は共有生成物のoverwrite/backup対象外とする。
+- `pixied generate devcontainer`または`dockerfile`で、同じプロジェクトPixi環境をコンテナ内に構築できる。DevContainerは`Dockerfile`と`devcontainer.json`だけを生成し、Pixi binaryを`ghcr.io/prefix-dev/pixi`から`mcr.microsoft.com/devcontainers/base:noble`へコピーして`PIXI_HOME=/opt/pixi`とdetached environmentを設定する。projectのinstallとshell hookはworkspace mount後の`postCreateCommand`で実行する。DevContainer生成では`.env`やentrypointを使わず、既定では生成済みファイルを上書きせずエラーで終了し、`--force`で上書き（`<name>.bak`へ1世代backup）する。Dockerfile生成ではdefinitionとして`pixi.toml`を優先し、なければ`pyproject.toml`を使い、lockfileはoptionalとする。
 - `pixied uninstall`を再実行しても、PixiEdenが所有しない資源や利用者の既存環境を削除しない。
 
 ## 再現範囲
 
-machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、`pixi.lock`、生成した`.envrc`・DevContainer・Dockerfile・`.env.example`・`generate-env.sh`、NFSのstate registryとaccount側dispatcher、およびNFS modeで許可した8つのshell設定ファイルである。host-localな`.env`、state file、runtime payload、短時間lock、lease、Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中sessionは共有せず、各machineで再構築する。
+machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、`pixi.lock`、生成した`.envrc`・DevContainer・Dockerfile、NFSのstate registryとaccount側dispatcher、およびNFS modeで許可した8つのshell設定ファイルである。state file、runtime payload、短時間lock、lease、Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中sessionは共有せず、各machineで再構築する。
 
 したがってPixiEdenが保証するのは「同じ定義から専用runtimeとプロジェクト環境を再構築できること」であり、別machineへZellijの画面や未同期の作業状態を移動することではない。Zellijの再接続は同じmachine上でsessionが残っている場合に限る。
 

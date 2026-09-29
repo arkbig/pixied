@@ -102,7 +102,6 @@ PYPROJECT
     esac
     env HOME="$home" bash -c \
         'cd -- "$1" && bash "$2" generate devcontainer' bash "$project" "$cli"
-    "$project/.devcontainer/generate-env.sh"
     printf '%s\n%s\n' "$project" "$tag"
 }
 
@@ -112,10 +111,6 @@ PYPROJECT
     project=$(generate_devcontainer_for_test dcbuild | sed -n '1p')
     tag=pixied-test-dcbuild
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf '[workspace]\nname = "sample"\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n' >"$project/pixi.toml"
-    # Override the host-derived uid/gid so the build is deterministic regardless of
-    # the test runner's own uid (a root runner would break useradd --uid 0).
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
     if grep -Fq -- 'ENV PATH=' "$project/.devcontainer/Dockerfile" ||
         grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' \
             "$project/.devcontainer/Dockerfile"; then
@@ -128,37 +123,10 @@ PYPROJECT
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 
-    run docker run --rm -v "$project":/workspace -w /workspace "$tag" id -u
-    assert_success
-    [ "$output" = "1000" ] || pixied_test_fail "container UID did not match the configured UID"
-
-    run docker run --rm -v "$project":/workspace -w /workspace "$tag" id -g
-    assert_success
-    [ "$output" = "1000" ] || pixied_test_fail "container GID did not match the configured GID"
-
     run docker run --rm -v "$project":/workspace -w /workspace "$tag" bash -c 'echo "$PIXI_HOME"'
     assert_success
     [ "$output" = "/opt/pixi" ] || pixied_test_fail "container did not forward PIXI_HOME=/opt/pixi"
 
-}
-
-@test "generate devcontainer entrypoint fails when .env is missing" {
-    command -v docker >/dev/null 2>&1 || skip "docker is not available"
-    local project tag empty
-    project=$(generate_devcontainer_for_test dcenv | sed -n '1p')
-    tag=pixied-test-dcenv
-    empty="$PIXIED_TEST_ROOT/dcenv-empty"
-    mkdir -p "$empty"
-    trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf '[workspace]\nname = "sample"\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n' >"$project/pixi.toml"
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
-
-    run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
-    assert_success
-
-    run docker run --rm -v "$empty":/workspace "$tag"
-    assert_failure
-    assert_output --partial 'is missing'
 }
 
 # PXD-010: the Dev Container Dockerfile must build for supported manifest,
@@ -169,9 +137,6 @@ PYPROJECT
     project=$(generate_devcontainer_for_test tomlonly | sed -n '1p')
     tag=pixied-test-tomlonly
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf '[workspace]\nname = "sample"\nchannels = ["conda-forge"]\nplatforms = ["linux-64"]\n' >"$project/pixi.toml"
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
-
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 }
@@ -182,8 +147,6 @@ PYPROJECT
     project=$(generate_devcontainer_for_test pyprojectonly pyproject | sed -n '1p')
     tag=pixied-test-pyprojectonly
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
-
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 }
@@ -194,13 +157,6 @@ PYPROJECT
     project=$(generate_devcontainer_for_test locked pixi-lock | sed -n '1p')
     tag=pixied-test-locked
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
-
-    grep -Fq -- 'COPY pixi.toml pixi.lock ./' "$project/.devcontainer/Dockerfile" ||
-        pixied_test_fail "locked fixture does not use a direct manifest and lock COPY"
-    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --all --locked' \
-        "$project/.devcontainer/Dockerfile" ||
-        pixied_test_fail "locked fixture does not use pixi install --all --locked"
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 }
@@ -211,8 +167,6 @@ PYPROJECT
     project=$(generate_devcontainer_for_test lockonly lock | sed -n '1p')
     tag=pixied-test-lockonly
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
-
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 }
@@ -223,8 +177,6 @@ PYPROJECT
     project=$(generate_devcontainer_for_test neither empty | sed -n '1p')
     tag=pixied-test-neither
     trap 'docker rmi -f "$tag" >/dev/null 2>&1 || true' EXIT
-    printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
-
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 }
