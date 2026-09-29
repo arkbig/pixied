@@ -70,11 +70,9 @@ assert_output() {
 # @description Create fake external commands used by observability tests.
 # @arg $1 string Directory in which to create fake command links.
 setup_fake_commands() {
-    local fake_bin=$1 command_name
+    local fake_bin=$1
     mkdir -p "$fake_bin"
-    for command_name in pixi zellij; do
-        ln -s "$PIXIED_REPO_ROOT/tests/fakes/external-command" "$fake_bin/$command_name"
-    done
+    ln -s "$PIXIED_REPO_ROOT/tests/fakes/external-command" "$fake_bin/pixi"
 }
 
 # @description Extract the version assignment from a pixied script.
@@ -1052,7 +1050,7 @@ PYPROJECT
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID=nfs-install PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$source/install-local.sh" --home-mode nfs --local-home "$local_home" \
-        --session-manager none --machine-id nfs-install --yes
+        --machine-id nfs-install --yes
     assert_success
     [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
         pixied_test_fail 'initial NFS install did not select its release'
@@ -1069,7 +1067,7 @@ PYPROJECT
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
         PIXIED_MACHINE_ID=nfs-install PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$same_version_source/install-local.sh" --home-mode nfs --local-home "$local_home" \
-        --session-manager none --machine-id nfs-install --yes
+        --machine-id nfs-install --yes
     assert_failure 1
     assert_output --partial 'different manifest'
     [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
@@ -1081,7 +1079,7 @@ PYPROJECT
         PIXIED_MACHINE_ID=nfs-install PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         PIXIED_DEPLOY_FAIL_PROMOTE=1 \
         bash "$failed_source/install-local.sh" --home-mode nfs --local-home "$local_home" \
-        --session-manager none --machine-id nfs-install --yes
+        --machine-id nfs-install --yes
     assert_failure 1
     [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
         pixied_test_fail 'failed local deployment changed the shared current release'
@@ -1143,7 +1141,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
-        --local-home "$alias_home" --session-manager none \
+        --local-home "$alias_home" \
         --machine-id "$machine_id" --yes
     assert_success
 
@@ -1168,7 +1166,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
-        --local-home "$alias_home" --session-manager none \
+        --local-home "$alias_home" \
         --machine-id "$machine_id" --yes
     assert_success
     assert_equal "$state_before" "$(<"$state_file")"
@@ -1179,7 +1177,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
-        --local-home "$alias_home" --session-manager none \
+        --local-home "$alias_home" \
         --machine-id "$machine_id" --yes
     assert_failure 1
     assert_output --partial 'cannot change local home during reinstall'
@@ -1203,7 +1201,7 @@ PYPROJECT
 
     run env -i PATH="$PATH" HOME="$account_home" USER="$test_user" \
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs \
-        PIXIED_LOCAL_HOME="$alias_home" PIXIED_SESSION_MANAGER=none \
+        PIXIED_LOCAL_HOME="$alias_home"  \
         PIXIED_MACHINE_ID="$machine_id" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -1248,7 +1246,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER=peer-user \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
-        --local-home "$peer_home" --session-manager none \
+        --local-home "$peer_home" \
         --machine-id "$peer_id" --yes
     assert_success
 
@@ -1268,7 +1266,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER=current-user \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$launcher" install --local-home "$current_alias_home" \
-        --session-manager none --machine-id "$current_id" --yes
+        --machine-id "$current_id" --yes
     assert_success
 
     current_state="$state/pixied/machines/$current_id/state"
@@ -1332,7 +1330,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER=peer-user \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
-        --local-home "$peer_home" --session-manager none \
+        --local-home "$peer_home" \
         --machine-id "$peer_id" --yes
     assert_success
 
@@ -1351,7 +1349,7 @@ PYPROJECT
     run env -i PATH="$PATH" HOME="$account_home" USER=current-user \
         XDG_STATE_HOME="$state" PIXIED_PIXI_BINARY_SOURCE="$fake_pixi" \
         bash "$launcher" install --local-home "$current_alias_home" \
-        --session-manager none --machine-id "$current_id" --yes
+        --machine-id "$current_id" --yes
     assert_success
     current_state="$state/pixied/machines/$current_id/state"
     [ -f "$current_state" ] || pixied_test_fail "current state is missing"
@@ -1385,11 +1383,11 @@ PYPROJECT
     expected_version=$(pixied_version_from_source "$PIXIED_REPO_ROOT/bin/pixied")
 
     run env -u PIXIED_MACHINE_ID -u PIXIED_HOME_MODE -u PIXIED_LOCAL_HOME \
-        -u PIXIED_SESSION_MANAGER -u PIXIED_PIXI_HOME HOME="$account_home" \
+        -u PIXIED_PIXI_HOME HOME="$account_home" \
         XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
-        --local-home "$local_home" --session-manager none --yes
+        --local-home "$local_home" --yes
     assert_success
 
     state_file=$(find "$state/pixied/machines" -mindepth 2 -maxdepth 2 \
@@ -1461,7 +1459,7 @@ MKDIR
     assert_success
 
     run env -i PATH="$fake_bin:/usr/bin:/bin" HOME="$home" USER="$test_user" \
-        PIXIED_HOME_MODE=nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=nfs  \
         PIXIED_EXPECTED_MKDIR_PATH="$expected_local_home" PIXIED_MKDIR_LOG="$mkdir_log" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_failure 1
@@ -1475,11 +1473,11 @@ MKDIR
         printf "" |
             env -i PATH="$1" HOME="$2" USER="$3" \
                 XDG_DATA_HOME="$4" XDG_CONFIG_HOME="$5" XDG_STATE_HOME="$6" \
-                PIXIED_HOME_MODE=nfs PIXIED_SESSION_MANAGER=none \
+                PIXIED_HOME_MODE=nfs  \
                 PIXIED_EXPECTED_MKDIR_PATH="$7" PIXIED_MKDIR_LOG="$8" \
                 PIXIED_TEST_RELEASE_ARCHIVE="$9" \
                 PIXIED_RELEASE_URL=https://example.invalid/pixied.tar.gz \
-                bash "${10}" --home-mode nfs --session-manager none
+                bash "${10}" --home-mode nfs
     ' bash "$fake_bin:/usr/bin:/bin" "$home" "$test_user" \
         "$PIXIED_TEST_ROOT/missing-nfs-pipe-data" \
         "$PIXIED_TEST_ROOT/missing-nfs-pipe-config" \
@@ -1510,7 +1508,7 @@ MKDIR
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=project-hook \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
 
@@ -1558,7 +1556,7 @@ MKDIR
 
     run env -u PIXI_HOME HOME="$account_home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=project-hook-nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=project-hook-nfs  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --home-mode nfs \
         --local-home "$local_home" --yes
@@ -1582,7 +1580,6 @@ MKDIR
 @test "command execution is observable" {
     local fake_bin="$PIXIED_TEST_ROOT/fake-bin"
     local log="$PIXIED_TEST_ROOT/commands.log"
-    local command_name
     setup_fake_commands "$fake_bin"
     : >"$log"
 
@@ -1591,11 +1588,7 @@ MKDIR
     assert_success
     assert_equal 'pixi 0.0.0-fake' "$output"
 
-    run env PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        bash -c '. "$1/lib/common.sh"; pixied_run zellij' bash "$PIXIED_REPO_ROOT"
-    assert_success
     grep -Fq -- 'pixi --version' "$log" || pixied_test_fail "missing pixi command log"
-    grep -Fq -- 'zellij' "$log" || pixied_test_fail "missing zellij command log"
     if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
         pixied_test_fail "system service commands were unexpectedly logged"
     fi
@@ -1634,13 +1627,13 @@ MKDIR
 
     run env HOME="$home" PIXI_HOME="$existing_pixi" \
         XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id" PIXIED_HOME_MODE=local  \
         PIXIED_COMMAND_LOG="$log" \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PATH="$home/.local/bin:$PATH" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
-    assert_output --partial 'Runtime hook, dedicated Pixi environment, and session support are ready'
+    assert_output --partial 'Runtime hook and dedicated Pixi environment are ready'
     assert_output --partial 'Option A (Start now):'
     assert_output --partial "pixied shell"
     assert_output --partial 'Option B (Automatic - Recommended):'
@@ -1656,14 +1649,12 @@ MKDIR
     assert_equal "$expected_version" "$version"
     grep -Fq -- 'bash --version' "$log" || pixied_test_fail "bash version was not logged"
     [ -x "$data/pixied/pixi/bin/direnv" ] || pixied_test_fail "dedicated direnv is missing"
-    [ ! -e "$data/pixied/pixi/bin/zellij" ] || pixied_test_fail "zellij was installed in none mode"
     [ -x "$home/.local/bin/pixied" ] || pixied_test_fail "launcher is missing"
     [ -f "$config_target/pixied/runtime-hook.bash" ] || pixied_test_fail "runtime hook is missing"
     [ -f "$state/pixied/machines/$machine_id/state" ] || pixied_test_fail "state is missing"
     assert_equal 'existing pixi environment' "$(<"$existing_pixi/bin/pixi")"
-    [ ! -e "$existing_pixi/bin/zellij" ] || pixied_test_fail "existing Pixi home was modified"
-    if command grep -Eq -- '^(zellij|systemctl|loginctl|sudo) ' "$log"; then
-        pixied_test_fail "none mode called a session-related command"
+    if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
+        pixied_test_fail "install called a host service command"
     fi
     [ ! -d "$home/.cache" ] || pixied_test_fail "unexpected cache directory: $home/.cache"
 }
@@ -1688,14 +1679,13 @@ MKDIR
         PIXIED_COMMAND_LOG="$log" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" local none "$1" "" |
+        printf "%s\n" local "$1" "" |
             script -qec "bash \"$2\" install" /dev/null
     ' bash "$machine_id" "$PIXIED_REPO_ROOT/bin/pixied"
     assert_success
     assert_output --partial 'Installation configuration wizard'
     assert_output --partial 'Review installation'
     assert_output --partial 'Home mode: local'
-    assert_output --partial 'Session manager: none'
     assert_output --partial 'Proceed with installation? [Y/n]'
     assert_output --partial 'NFS synchronization is disabled'
     [ -f "$state/pixied/machines/$machine_id/state" ] ||
@@ -1732,7 +1722,7 @@ MKDIR
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" nfs "$1" none "" "" |
+        printf "%s\n" nfs "$1" "" "" |
             script -qec "bash \"$2\"" /dev/null
     ' bash "$local_home" "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -1767,7 +1757,7 @@ MKDIR
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" nfs "$1" none "" "" |
+        printf "%s\n" nfs "$1" "" "" |
             script -qec "bash \"$2\"" /dev/null
     ' bash "$alias_home" "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -1805,7 +1795,7 @@ MKDIR
         PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" "" "$1" none "" y "" |
+        printf "%s\n" "" "$1" "" y "" |
             script -qec "bash \"$2\"" /dev/null
     ' bash "$local_home" "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -1833,7 +1823,7 @@ MKDIR
         PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" "" "$1" none "" n "$2" "" |
+        printf "%s\n" "" "$1" "" n "$2" "" |
             script -qec "bash \"$3\"" /dev/null
     ' bash "$missing_home" "$existing_home" "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -1858,7 +1848,7 @@ MKDIR
         PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" "" "$1" none "" n |
+        printf "%s\n" "" "$1" "" n |
             script -qec "bash \"$2\"" /dev/null
     ' bash "$missing_home" "$PIXIED_REPO_ROOT/install-local.sh"
     assert_failure 1
@@ -1883,7 +1873,7 @@ MKDIR
         PIXIED_MACHINE_ID="$machine_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
-        printf "%s\n" "" "$1" none "" y "" |
+        printf "%s\n" "" "$1" "" y "" |
             script -qec "bash \"$2\" install" /dev/null
     ' bash "$local_home" "$PIXIED_REPO_ROOT/bin/pixied"
     assert_success
@@ -1909,7 +1899,7 @@ MKDIR
     run env -i PATH="$PATH" HOME="$home" USER="$test_user" \
         PIXIED_HOME_MODE=nfs XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
-        PIXIED_SESSION_MANAGER=none \
+         \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
     assert_failure 1
     assert_output --partial "selected NFS mode requires a local home"
@@ -1921,7 +1911,7 @@ MKDIR
     run env -i PATH="$PATH" HOME="$home" USER="$test_user" \
         PIXIED_HOME_MODE=nfs XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
-        PIXIED_SESSION_MANAGER=none \
+         \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes \
         --home-mode nfs --local-home "$explicit_home"
     assert_failure 1
@@ -1948,7 +1938,7 @@ MKDIR
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$peer_id" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes \
-        --home-mode nfs --local-home "$peer_local_home" --session-manager none
+        --home-mode nfs --local-home "$peer_local_home"
     assert_success
     [ -f "$state/pixied/machines/$peer_id/state" ] ||
         pixied_test_fail "peer state is missing"
@@ -1963,9 +1953,6 @@ MKDIR
     assert_success
     [ -f "$state/pixied/machines/$new_id/state" ] ||
         pixied_test_fail "fresh install state is missing"
-    # The default session manager would be zellij; the peer value wins.
-    grep -Fq -- "session_manager=none" "$state/pixied/machines/$new_id/state" ||
-        pixied_test_fail "session manager was not seeded from the peer machine"
     grep -Fq -- "local_home=$new_local_home" "$state/pixied/machines/$new_id/state" ||
         pixied_test_fail "local home was inherited from the peer machine"
     if grep -Fq -- "local_home=$peer_local_home" "$state/pixied/machines/$new_id/state"; then
@@ -2037,8 +2024,8 @@ CURL
         PIXIED_TEST_RELEASE_ARCHIVE="$archive" PIXIED_RELEASE_URL=https://example.invalid/pixied.tar.gz \
         HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase7-release PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install.sh" --home-mode local --session-manager none --yes
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install.sh" --home-mode local --yes
     assert_success
     [ -x "$data/pixied/bin/pixied" ] || pixied_test_fail "remote release installer did not deploy the CLI"
     [ -f "$state/pixied/machines/phase7-release/state" ] ||
@@ -2101,11 +2088,11 @@ MKDIR
         XDG_DATA_HOME="$PIXIED_TEST_ROOT/missing-nfs-release-data" \
         XDG_CONFIG_HOME="$PIXIED_TEST_ROOT/missing-nfs-release-config" \
         XDG_STATE_HOME="$PIXIED_TEST_ROOT/missing-nfs-release-state" \
-        PIXIED_HOME_MODE=nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=nfs  \
         PIXIED_EXPECTED_MKDIR_PATH="$expected_local_home" PIXIED_MKDIR_LOG="$mkdir_log" \
         PIXIED_TEST_RELEASE_ARCHIVE="$archive" \
         PIXIED_RELEASE_URL=https://example.invalid/pixied.tar.gz \
-        bash "$PIXIED_REPO_ROOT/install.sh" --home-mode nfs --session-manager none --yes
+        bash "$PIXIED_REPO_ROOT/install.sh" --home-mode nfs --yes
     assert_failure 1
     assert_output --partial 'selected NFS mode requires a local home'
     assert_output --partial '--local-home PATH'
@@ -2237,35 +2224,35 @@ CURL
 
 # US-101-1
 # US-101-2
-@test "zellij mode provisions optional Global package and isolated Pixi variables" {
-    local home="$PIXIED_TEST_ROOT/phase2-zellij-home"
-    local data="$PIXIED_TEST_ROOT/phase2-zellij-data"
-    local log="$PIXIED_TEST_ROOT/phase2-zellij.log"
-    local state_file="$PIXIED_TEST_ROOT/phase2-zellij-state/pixied/machines/phase2-zellij/state"
+@test "default install provisions direnv and isolated Pixi variables" {
+    local home="$PIXIED_TEST_ROOT/phase2-default-home"
+    local data="$PIXIED_TEST_ROOT/phase2-default-data"
+    local log="$PIXIED_TEST_ROOT/phase2-default.log"
+    local state_file="$PIXIED_TEST_ROOT/phase2-default-state/pixied/machines/phase2-default/state"
     mkdir -p "$home"
     : >"$log"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_STATE_HOME="$PIXIED_TEST_ROOT/phase2-zellij-state" \
-        PIXIED_MACHINE_ID=phase2-zellij PIXIED_SESSION_MANAGER=zellij \
+        XDG_STATE_HOME="$PIXIED_TEST_ROOT/phase2-default-state" \
+        PIXIED_MACHINE_ID=phase2-default \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
     [ -x "$data/pixied/pixi/bin/direnv" ] || pixied_test_fail "dedicated direnv is missing"
-    [ -x "$data/pixied/pixi/bin/zellij" ] || pixied_test_fail "dedicated zellij is missing"
+    [ ! -e "$data/pixied/pixi/bin/zellij" ] || pixied_test_fail "unexpected dedicated zellij is present"
     grep -Fq -- 'PIXI_HOME=' "$log" || pixied_test_fail "Pixi HOME was not isolated"
     grep -Fq -- 'PIXI_CACHE_DIR=' "$log" || pixied_test_fail "Pixi cache was not isolated"
     grep -Fq -- 'PIXI_NO_PATH_UPDATE=1' "$log" || pixied_test_fail "Pixi path update was not disabled"
-    grep -Fq -- 'session_manager=zellij' "$state_file" || pixied_test_fail "session manager was not persisted"
     grep -Eq -- '^pixi_binary_hash=[0-9a-f]{64}$' "$state_file" ||
         pixied_test_fail "Pixi binary hash was not persisted"
     grep -Eq -- '^direnv_hash=[0-9a-f]{64}$' "$state_file" ||
         pixied_test_fail "direnv hash was not persisted"
-    grep -Eq -- '^zellij_hash=[0-9a-f]{64}$' "$state_file" ||
-        pixied_test_fail "zellij hash was not persisted"
+    if grep -Eq -- '^(session_manager|zellij_path|zellij_hash)=' "$state_file"; then
+        pixied_test_fail "state contains removed session keys"
+    fi
 }
 
-@test "zellij mode avoids host service commands" {
+@test "default install avoids host service commands" {
     local home="$PIXIED_TEST_ROOT/phase5-direct-home"
     local data="$PIXIED_TEST_ROOT/phase5-direct-data"
     local config="$PIXIED_TEST_ROOT/phase5-direct-config"
@@ -2279,7 +2266,7 @@ CURL
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-direct PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_MACHINE_ID=phase5-direct  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -2289,7 +2276,7 @@ CURL
     fi
 }
 
-@test "direct shell attaches to the dedicated Zellij session" {
+@test "direct shell starts an interactive dedicated Bash" {
     local home="$PIXIED_TEST_ROOT/phase5-shell-home"
     local data="$PIXIED_TEST_ROOT/phase5-shell-data"
     local config="$PIXIED_TEST_ROOT/phase5-shell-config"
@@ -2303,10 +2290,12 @@ CURL
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-shell PIXIED_SESSION_MANAGER=zellij \
+        PIXIED_MACHINE_ID=phase5-shell \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
+
+    printf 'printf "direct-shell-home=%%s\\n" "$HOME"\n' >"$home/.bashrc"
 
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
@@ -2315,78 +2304,10 @@ CURL
         printf "exit\\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell" /dev/null
     ' "$data"
     assert_success
-    grep -Fq -- "zellij attach --create pixied" "$log" ||
-        pixied_test_fail "shell did not directly attach to the dedicated session"
+    assert_output --partial "direct-shell-home=$home"
     if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
         pixied_test_fail "shell invoked a host service command"
     fi
-}
-
-@test "direct shell skips Zellij attach when auto-attach is none" {
-    local home="$PIXIED_TEST_ROOT/phase5-mode-none-home"
-    local data="$PIXIED_TEST_ROOT/phase5-mode-none-data"
-    local config="$PIXIED_TEST_ROOT/phase5-mode-none-config"
-    local state="$PIXIED_TEST_ROOT/phase5-mode-none-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase5-mode-none-bin"
-    local log="$PIXIED_TEST_ROOT/phase5-mode-none.log"
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
-        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase5-mode-none PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_success
-
-    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
-        PIXIED_AUTO_ATTACH=none \
-        bash -c '
-        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell" /dev/null
-    ' "$data"
-    assert_success
-    if grep -Fq -- "zellij attach --create" "$log"; then
-        pixied_test_fail "auto-attach=none shell unexpectedly attached to Zellij"
-    fi
-
-    : >"$log"
-    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
-        bash -c '
-        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell --auto-attach none" /dev/null
-    ' "$data"
-    assert_success
-    if grep -Fq -- "zellij attach --create" "$log"; then
-        pixied_test_fail "shell --auto-attach none unexpectedly attached to Zellij"
-    fi
-
-    : >"$log"
-    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
-        bash -c '
-        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell --auto-attach=none" /dev/null
-    ' "$data"
-    assert_success
-    if grep -Fq -- "zellij attach --create" "$log"; then
-        pixied_test_fail "shell --auto-attach=none unexpectedly attached to Zellij"
-    fi
-
-    : >"$log"
-    run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" PIXIED_MACHINE_ID=phase5-mode-none \
-        bash -c '
-        printf "exit\n" | script -qec "bash \"$0/pixied/bin/pixied\" shell --auto-attach=auto" /dev/null
-    ' "$data"
-    assert_success
-    grep -Fq -- "zellij attach --create pixied" "$log" ||
-        pixied_test_fail "shell --auto-attach=auto did not attach to Zellij"
 }
 
 @test "shell --help prints the shell subcommand usage" {
@@ -2395,8 +2316,8 @@ CURL
         PATH="/usr/bin:/bin" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" shell --help
     assert_success
-    assert_output --partial 'Usage: pixied shell [--auto-attach auto|none]'
-    assert_output --partial 'zellij attach --create pixied'
+    assert_output --partial 'Usage: pixied shell'
+    assert_output --partial 'Start an interactive Bash shell'
 }
 
 @test "hook --help prints the hook subcommand usage" {
@@ -2405,7 +2326,7 @@ CURL
         PATH="/usr/bin:/bin" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" hook --help
     assert_success
-    assert_output --partial 'Usage: pixied hook <bash|zsh> [--auto-attach auto|none]'
+    assert_output --partial 'Usage: pixied hook <bash|zsh>'
     assert_output --partial 'The target shell: bash or zsh.'
 }
 
@@ -2415,7 +2336,30 @@ CURL
         PATH="/usr/bin:/bin" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" hook bash --help
     assert_success
-    assert_output --partial 'Usage: pixied hook <bash|zsh> [--auto-attach auto|none]'
+    assert_output --partial 'Usage: pixied hook <bash|zsh>'
+}
+
+@test "removed session options are rejected" {
+    run env HOME=/none PIXIED_MACHINE_ID=phase5-removed-install \
+        XDG_DATA_HOME=/none XDG_CONFIG_HOME=/none XDG_STATE_HOME=/none \
+        PATH="/usr/bin:/bin" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" install --session-manager none
+    assert_failure 2
+    assert_output --partial 'unknown install option: --session-manager'
+
+    run env HOME=/none PIXIED_MACHINE_ID=phase5-removed-shell \
+        XDG_DATA_HOME=/none XDG_CONFIG_HOME=/none XDG_STATE_HOME=/none \
+        PATH="/usr/bin:/bin" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" shell --auto-attach none
+    assert_failure 2
+    assert_output --partial 'unknown option: --auto-attach'
+
+    run env HOME=/none PIXIED_MACHINE_ID=phase5-removed-hook \
+        XDG_DATA_HOME=/none XDG_CONFIG_HOME=/none XDG_STATE_HOME=/none \
+        PATH="/usr/bin:/bin" \
+        bash "$PIXIED_REPO_ROOT/bin/pixied" hook bash --auto-attach=none
+    assert_failure 2
+    assert_output --partial 'unknown option: --auto-attach=none'
 }
 
 # US-102-2
@@ -2429,7 +2373,7 @@ CURL
     mkdir -p "$home"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook PIXIED_SESSION_MANAGER=none \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -2476,7 +2420,7 @@ CURL
     printf 'user-managed shell configuration\n' >"$home/.bashrc"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-output PIXIED_SESSION_MANAGER=none \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-output  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -2504,7 +2448,7 @@ CURL
     : >"$direnv_log"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-zsh-hook PIXIED_SESSION_MANAGER=none \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-zsh-hook  \
         PIXIED_FAKE_DIRENV_LOG="$direnv_log" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
@@ -2545,175 +2489,38 @@ CURL
 }
 
 # US-103-2
-@test "interactive hook starts Zellij only under the approved conditions" {
+@test "interactive hook activates the runtime without starting a child shell" {
     command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
-    local home="$PIXIED_TEST_ROOT/phase3-hook-autostart-home"
-    local data="$PIXIED_TEST_ROOT/phase3-hook-autostart-data"
-    local config="$PIXIED_TEST_ROOT/phase3-hook-autostart-config"
-    local state="$PIXIED_TEST_ROOT/phase3-hook-autostart-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase3-hook-autostart-bin"
-    local log="$PIXIED_TEST_ROOT/phase3-hook-autostart.log"
-    local machine_id=phase3-hook-autostart
+    local home="$PIXIED_TEST_ROOT/phase3-hook-interactive-home"
+    local data="$PIXIED_TEST_ROOT/phase3-hook-interactive-data"
+    local config="$PIXIED_TEST_ROOT/phase3-hook-interactive-config"
+    local state="$PIXIED_TEST_ROOT/phase3-hook-interactive-state"
+    local direnv_log="$PIXIED_TEST_ROOT/phase3-hook-interactive-direnv.log"
+    local runtime_hook="$config/pixied/runtime-hook.bash"
     mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
+    : >"$direnv_log"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
-        PIXIED_SESSION_MANAGER=zellij \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-interactive \
+        PIXIED_FAKE_DIRENV_LOG="$direnv_log" \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
 
-    run env -u CI -u ZELLIJ -u PIXI_HOME -u PIXIED_RUNTIME_HOOK_ACTIVE -u PIXIED_STATE_DIR \
-        -u PIXIED_RUNTIME_STATE_FILE -u PIXIED_STATE_FILE -u PIXIED_DATA_DIR \
-        -u PIXIED_CONFIG_DIR -u PIXIED_PIXI_HOME HOME="$home" \
+    run env -u PIXI_HOME -u PIXIED_RUNTIME_HOOK_ACTIVE HOME="$home" \
         XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" TERM=xterm-256color \
-        script -qec "bash -ic 'eval \"\$(bash \"$data/pixied/bin/pixied\" hook bash)\"; printf \"hook-finished\\n\"'" \
+        PIXIED_MACHINE_ID=phase3-hook-interactive PIXIED_FAKE_DIRENV_LOG="$direnv_log" \
+        PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" TERM=xterm-256color \
+        script -qec "bash -ic 'eval \"\$(bash \"$data/pixied/bin/pixied\" hook bash)\"; printf \"hook-home=%s\\n\" \"\$HOME\"; printf \"hook-finished\\n\"'" \
         /dev/null
     assert_success
+    assert_output --partial "hook-home=$home"
     assert_output --partial 'hook-finished'
-    grep -Fq -- "$data/pixied/pixi/bin/zellij attach --create pixied" "$log" ||
-        pixied_test_fail "interactive hook did not start the dedicated Zellij session"
-
-    : >"$log"
-    run env -u ZELLIJ -u PIXI_HOME CI=1 HOME="$home" \
-        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" TERM=xterm-256color \
-        script -qec "bash -ic 'eval \"\$(bash \"$data/pixied/bin/pixied\" hook bash)\"; printf \"hook-finished\\n\"'" \
-        /dev/null
-    assert_success
-    assert_output --partial 'hook-finished'
-    if grep -Fq -- 'zellij attach --create' "$log"; then
-        pixied_test_fail "CI hook unexpectedly started Zellij"
+    grep -Fq -- 'hook bash' "$direnv_log" ||
+        pixied_test_fail "interactive hook did not request the Bash direnv hook"
+    if grep -Eq -- 'PIXIED_RUNTIME_HOOK_AUTOSTART|PIXIED_AUTO_ATTACH|PIXIED_SESSION_MANAGER|ZELLIJ|zellij|pixied_cli_path.*shell' "$runtime_hook"; then
+        pixied_test_fail "runtime hook still starts a child shell"
     fi
-
-    : >"$log"
-    run env -u CI -u PIXI_HOME ZELLIJ=1 HOME="$home" \
-        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" TERM=xterm-256color \
-        script -qec "bash -ic 'eval \"\$(bash \"$data/pixied/bin/pixied\" hook bash)\"; printf \"hook-finished\\n\"'" \
-        /dev/null
-    assert_success
-    assert_output --partial 'hook-finished'
-    if grep -Fq -- 'zellij attach --create' "$log"; then
-        pixied_test_fail "nested Zellij hook unexpectedly started another session"
-    fi
-
-    : >"$log"
-    run env -u CI -u ZELLIJ -u PIXI_HOME HOME="$home" \
-        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" \
-        bash -c 'eval "$(bash "$1/pixied/bin/pixied" hook bash)"; printf "hook-finished\n"' \
-        bash "$data"
-    assert_success
-    assert_output --partial 'hook-finished'
-    if grep -Fq -- 'zellij attach --create' "$log"; then
-        pixied_test_fail "non-interactive hook unexpectedly started Zellij"
-    fi
-}
-
-@test "interactive hook with --auto-attach none bakes none and skips Zellij auto-attach" {
-    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
-    local home="$PIXIED_TEST_ROOT/phase3-mode-none-home"
-    local data="$PIXIED_TEST_ROOT/phase3-mode-none-data"
-    local config="$PIXIED_TEST_ROOT/phase3-mode-none-config"
-    local state="$PIXIED_TEST_ROOT/phase3-mode-none-state"
-    local fake_bin="$PIXIED_TEST_ROOT/phase3-mode-none-bin"
-    local log="$PIXIED_TEST_ROOT/phase3-mode-none.log"
-    local machine_id=phase3-mode-none
-    local runtime_hook="$config/pixied/runtime-hook.bash"
-    local state_file="$state/pixied/machines/$machine_id/state"
-    local hook_hash
-    mkdir -p "$home"
-    setup_fake_commands "$fake_bin"
-    : >"$log"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
-        PIXIED_SESSION_MANAGER=zellij \
-        PATH="$fake_bin:/usr/bin:/bin" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_success
-
-    run env -u CI -u ZELLIJ -u PIXI_HOME -u PIXIED_RUNTIME_HOOK_ACTIVE -u PIXIED_STATE_DIR \
-        -u PIXIED_RUNTIME_STATE_FILE -u PIXIED_STATE_FILE -u PIXIED_DATA_DIR \
-        -u PIXIED_CONFIG_DIR -u PIXIED_PIXI_HOME HOME="$home" \
-        XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID="$machine_id" PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
-        PIXIED_COMMAND_LOG="$log" TERM=xterm-256color \
-        script -qec "bash -ic 'eval \"\$(bash \"$data/pixied/bin/pixied\" hook bash --auto-attach none)\"; printf \"hook-finished\\n\"'" \
-        /dev/null
-    assert_success
-    assert_output --partial 'hook-finished'
-    [[ "${output:-}" != *ERROR* ]] ||
-        pixied_test_fail "hook reported an internal ERROR: ${output:-}"
-    if grep -Fq -- 'zellij attach --create' "$log"; then
-        pixied_test_fail "auto-attach=none hook unexpectedly started Zellij"
-    fi
-    grep -Fq -- 'export PIXIED_AUTO_ATTACH=none' "$runtime_hook" ||
-        pixied_test_fail "hook did not bake PIXIED_AUTO_ATTACH=none into the runtime hook"
-    hook_hash=$(sha256sum "$runtime_hook" | cut -d' ' -f1)
-    [[ "$hook_hash" =~ ^[0-9a-f]{64}$ ]] ||
-        pixied_test_fail "runtime hook hash is not a sha256 hex string: $hook_hash"
-    grep -Fq -- "runtime_hook_hash=$hook_hash" "$state_file" ||
-        pixied_test_fail "state runtime_hook_hash does not match the hook file hash"
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="$machine_id" \
-        PATH="$data/pixied/bin:$data/pixied/pixi/bin:/usr/bin:/bin" \
-        bash "$data/pixied/bin/pixied" run true
-    assert_success "run after hook"
-    [[ "${output:-}" != *ERROR* ]] ||
-        pixied_test_fail "run after hook reported an internal ERROR: ${output:-}"
-    [[ "${output:-}" != *'managed path hash does not match'* ]] ||
-        pixied_test_fail "run after hook hit a stale hook hash: ${output:-}"
-}
-
-@test "hook --auto-attach space and equals forms keep the shell positional" {
-    local home="$PIXIED_TEST_ROOT/phase3-hook-forms-home"
-    local data="$PIXIED_TEST_ROOT/phase3-hook-forms-data"
-    local config="$PIXIED_TEST_ROOT/phase3-hook-forms-config"
-    local state="$PIXIED_TEST_ROOT/phase3-hook-forms-state"
-    local state_file="$state/pixied/machines/phase3-hook-forms/state"
-    local runtime_hook="$config/pixied/runtime-hook.bash"
-    local variant hook_hash
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-forms PIXIED_SESSION_MANAGER=none \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-
-    for variant in 'bash --auto-attach none' 'bash --auto-attach=none' \
-        '--auto-attach none bash' '--auto-attach=none bash'; do
-        # shellcheck disable=SC2086 # Variant is intentionally word-split into hook arguments.
-        run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-            XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-forms \
-            bash "$data/pixied/bin/pixied" hook $variant
-        assert_success "hook $variant"
-        [[ "${output:-}" != *ERROR* ]] ||
-            pixied_test_fail "hook $variant reported an internal ERROR: ${output:-}"
-        assert_equal ". $runtime_hook" "$output"
-        grep -Fq -- 'export PIXIED_AUTO_ATTACH=none' "$runtime_hook" ||
-            pixied_test_fail "hook $variant did not bake PIXIED_AUTO_ATTACH=none"
-        hook_hash=$(sha256sum "$runtime_hook" | cut -d' ' -f1)
-        grep -Fq -- "runtime_hook_hash=$hook_hash" "$state_file" ||
-            pixied_test_fail "hook $variant left a stale runtime_hook_hash"
-        run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-            XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-forms \
-            bash "$data/pixied/bin/pixied" run true
-        assert_success "run after hook $variant"
-        [[ "${output:-}" != *ERROR* ]] ||
-            pixied_test_fail "run after hook $variant reported an ERROR: ${output:-}"
-    done
 }
 
 # US-103-3
@@ -2727,7 +2534,7 @@ CURL
     mkdir -p "$home" "$parent_home"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-invalid PIXIED_SESSION_MANAGER=none \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-hook-invalid  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -2747,7 +2554,7 @@ CURL
 # US-104-1
 # US-104-2
 # US-104-3
-@test "run command bypasses Zellij and returns the child status" {
+@test "run command preserves the child status and runtime environment" {
     local home="$PIXIED_TEST_ROOT/phase3-command-home"
     local data="$PIXIED_TEST_ROOT/phase3-command-data"
     local config="$PIXIED_TEST_ROOT/phase3-command-config"
@@ -2757,13 +2564,13 @@ CURL
     : >"$log"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command PIXIED_SESSION_MANAGER=zellij \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command PIXIED_SESSION_MANAGER=zellij \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command \
         PIXIED_COMMAND_LOG="$log" bash "$data/pixied/bin/pixied" run bash -c \
         'printf "child_home=%s\nchild_pixi=%s\nchild_pixied=%s\n" "$HOME" "$PIXI_HOME" "$(command -v pixied)"; exit 0'
     assert_success
@@ -2772,7 +2579,7 @@ CURL
     assert_output --partial "child_pixied=$home/.local/bin/pixied"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command PIXIED_SESSION_MANAGER=zellij \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command \
         PIXIED_COMMAND_LOG="$log" bash "$data/pixied/bin/pixied" run bash -c \
         'printf "child_home=%s\nchild_pixi=%s\n" "$HOME" "$PIXI_HOME"; exit 7'
     assert_failure 7
@@ -2780,63 +2587,10 @@ CURL
     assert_output --partial "child_pixi=$data/pixied/pixi"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command PIXIED_SESSION_MANAGER=zellij \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command \
         PIXIED_COMMAND_LOG="$log" bash "$data/pixied/bin/pixied" run bash -c \
         'kill -TERM "$$"'
     assert_failure 143
-    ! grep -Fq -- 'attach --create' "$log" ||
-        pixied_test_fail "explicit command unexpectedly attached to Zellij"
-}
-
-# US-105-1
-@test "none session starts an interactive dedicated Bash" {
-    command -v script >/dev/null 2>&1 || skip "script command is required for the TTY test"
-    local home="$PIXIED_TEST_ROOT/phase3-none-session-home"
-    local data="$PIXIED_TEST_ROOT/phase3-none-session-data"
-    local config="$PIXIED_TEST_ROOT/phase3-none-session-config"
-    local state="$PIXIED_TEST_ROOT/phase3-none-session-state"
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-none-session \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh"
-    assert_success
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-none-session \
-        bash -c '
-        printf "%s\n" '\''printf none-session >"$HOME/none-session"'\'' exit |
-            script -qec "bash \"$1/pixied/bin/pixied\" shell" /dev/null
-    ' bash "$data"
-    assert_success
-    assert_equal 'none-session' "$(<"$home/none-session")"
-}
-
-# US-101-3
-@test "session manager changes require uninstall" {
-    local home="$PIXIED_TEST_ROOT/phase2-options-home"
-    local data="$PIXIED_TEST_ROOT/phase2-options-data"
-    local state="$PIXIED_TEST_ROOT/phase2-options-state"
-    local fake_source="$PIXIED_REPO_ROOT/tests/fakes/pixi"
-    local cli="$PIXIED_REPO_ROOT/bin/pixied"
-    local state_file="$state/pixied/machines/phase2-options/state"
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-options PIXIED_SESSION_MANAGER=none \
-        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install
-    assert_success
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-options PIXIED_SESSION_MANAGER=none \
-        PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --session-manager zellij
-    assert_failure 1
-    assert_output --partial 'cannot change session manager during reinstall'
-    grep -Fq -- 'session_manager=none' "$state_file" ||
-        pixied_test_fail "session manager state was changed unexpectedly"
-    [ ! -e "$data/pixied/pixi/bin/zellij" ] ||
-        pixied_test_fail "CLI-selected zellij was installed before uninstall"
 }
 
 # US-101-3
@@ -2851,14 +2605,14 @@ CURL
     mkdir -p "$home" "$local_home"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-homemode  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install
     assert_success
     grep -Fq -- 'home_mode=local' "$state_file" ||
         pixied_test_fail "baseline home mode was not recorded"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-homemode  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
         --home-mode=nfs --local-home="$local_home"
     assert_failure 1
@@ -2869,7 +2623,7 @@ CURL
         pixied_test_fail "local home state was changed unexpectedly"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-homemode  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
         --local-home="$local_home"
     assert_failure 1
@@ -2878,7 +2632,7 @@ CURL
         pixied_test_fail "local home state was changed unexpectedly"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-homemode PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-homemode  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
         --home-mode local
     assert_success
@@ -2897,7 +2651,7 @@ CURL
     mkdir -p "$home" "$first_local" "$second_local"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-nfshome PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-nfshome  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
         --home-mode nfs --local-home "$first_local"
     assert_success
@@ -2905,7 +2659,7 @@ CURL
         pixied_test_fail "baseline local home was not recorded"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-nfshome PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-nfshome  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
         --home-mode local
     assert_failure 1
@@ -2914,7 +2668,7 @@ CURL
         pixied_test_fail "home mode state was changed unexpectedly"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-nfshome PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-nfshome  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$cli" install --yes \
         --home-mode nfs --local-home "$second_local"
     assert_failure 1
@@ -2933,7 +2687,7 @@ CURL
     mkdir -p "$home"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-recovery PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-recovery  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" PIXIED_FAKE_PIXI_FAIL_VERSION=1 \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_failure 1
@@ -2942,7 +2696,7 @@ CURL
         pixied_test_fail "checkpoint Pixi hash was not persisted"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase2-recovery PIXIED_SESSION_MANAGER=none \
+        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase2-recovery  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_success
 }
@@ -2960,7 +2714,7 @@ CURL
 
     run env HOME="$home" PIXI_HOME="$existing_pixi" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase6-local PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase6-local PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -2977,8 +2731,8 @@ CURL
         pixied_test_fail "current state remains"
     [ -d "$home" ] || pixied_test_fail "account home was removed"
     assert_equal 'pre-existing Pixi' "$(<"$existing_pixi/bin/pixi")"
-    if command grep -Eq -- '^(zellij|systemctl|loginctl|sudo) ' "$log"; then
-        pixied_test_fail "none-mode uninstall called a session-related command"
+    if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
+        pixied_test_fail "uninstall called a host service command"
     fi
 }
 
@@ -2994,7 +2748,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase6-nfs PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase6-nfs  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3022,14 +2776,14 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase6-shared-one PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase6-shared-one PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase6-shared-two PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase6-shared-two PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$data/pixied/bin/pixied" install --yes
     assert_success
@@ -3070,14 +2824,14 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=nested-a PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=nested-a PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data/other" XDG_CONFIG_HOME="$config/other" \
         XDG_STATE_HOME="$state" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=nested-b PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=nested-b PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes --pixi-home "$data/pixied/pixi"
     assert_success
@@ -3104,7 +2858,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hash \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3132,7 +2886,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hook-recovery \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3149,7 +2903,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-hook-recovery \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$data/pixied/bin/pixied" install --yes
     assert_success
@@ -3180,7 +2934,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-path \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3206,7 +2960,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-recovery \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_FAKE_PIXI_FAIL_VERSION=1 bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_failure 1
@@ -3214,7 +2968,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-recovery \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
     assert_success
@@ -3240,7 +2994,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-pending \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=none \
+        PIXIED_HOME_MODE=local  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3257,100 +3011,6 @@ CURL
     [ ! -e "$pending_state" ] || pixied_test_fail "pending state quarantine remains"
 }
 
-@test "uninstall refuses an active direct-attach Zellij session" {
-    local home="$PIXIED_TEST_ROOT/phase6-active-session-home"
-    local data="$PIXIED_TEST_ROOT/phase6-active-session-data"
-    local config="$PIXIED_TEST_ROOT/phase6-active-session-config"
-    local state="$PIXIED_TEST_ROOT/phase6-active-session-state"
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-active-session \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-active-session \
-        PIXIED_FAKE_ZELLIJ_REMAINS=1 \
-        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
-        bash "$data/pixied/bin/pixied" uninstall --yes
-    assert_failure 1
-    assert_output --partial 'managed Zellij session is active'
-    assert_output --partial $'To uninstall:\n  1. Verify the session:'
-    assert_output --partial $'\n  2. End the session:'
-    assert_output --partial $'\n  3. Rerun: pixied uninstall'
-    [ -f "$state/pixied/machines/phase6-active-session/state" ] ||
-        pixied_test_fail "state was removed while the Zellij session was active"
-    [ -d "$data/pixied" ] ||
-        pixied_test_fail "data was removed while the Zellij session was active"
-}
-
-@test "uninstall warns and continues when the managed Zellij session cannot be inspected" {
-    local home="$PIXIED_TEST_ROOT/phase6-session-list-failure-home"
-    local data="$PIXIED_TEST_ROOT/phase6-session-list-failure-data"
-    local config="$PIXIED_TEST_ROOT/phase6-session-list-failure-config"
-    local state="$PIXIED_TEST_ROOT/phase6-session-list-failure-state"
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-session-list-failure \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-session-list-failure \
-        PIXIED_FAKE_ZELLIJ_LIST_FAIL=1 \
-        bash "$data/pixied/bin/pixied" uninstall --yes
-    assert_success
-    assert_output --partial 'could not inspect the managed Zellij session'
-    [ ! -e "$state/pixied/machines/phase6-session-list-failure/state" ] ||
-        pixied_test_fail "state remains when the Zellij session list failed"
-    [ ! -e "$data/pixied" ] ||
-        pixied_test_fail "data remains when the Zellij session list failed"
-}
-
-@test "uninstall explains and can force through a missing Zellij path" {
-    local home="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-home"
-    local data="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-data"
-    local config="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-config"
-    local state="$PIXIED_TEST_ROOT/phase6-missing-zellij-path-state"
-    local state_file="$state/pixied/machines/phase6-missing-zellij-path/state"
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-missing-zellij-path \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-    sed -i '/^zellij_path=/d' "$state_file"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-missing-zellij-path \
-        bash "$data/pixied/bin/pixied" uninstall --yes
-    assert_failure 1
-    assert_output --partial 'cannot verify whether the managed Zellij session is active'
-    assert_output --partial 'uninstall state is missing Zellij path'
-    assert_output --partial 'zellij list-sessions --no-formatting'
-    assert_output --partial 'zellij delete-session pixied'
-    assert_output --partial 'pixied uninstall --force'
-    [ -f "$state_file" ] || pixied_test_fail "state was removed without --force"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase6-missing-zellij-path \
-        bash "$data/pixied/bin/pixied" uninstall --yes --force
-    assert_success
-    assert_output --partial 'uninstalling with --force without checking the managed Zellij session'
-    assert_output --partial 'uninstall state is missing Zellij path'
-    assert_output --partial 'zellij delete-session pixied'
-    [ ! -e "$state_file" ] || pixied_test_fail "state remains after forced uninstall"
-    [ ! -e "$data/pixied" ] || pixied_test_fail "data remains after forced uninstall"
-}
-
 @test "concurrent runtime: run and shell leases coexist" {
     local home="$PIXIED_TEST_ROOT/lease-coexist-home"
     local data="$PIXIED_TEST_ROOT/lease-coexist-data"
@@ -3362,7 +3022,7 @@ CURL
     local base=(env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data"
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state"
         PIXIED_MACHINE_ID=lease-coexist PIXIED_HOME_MODE=local
-        PIXIED_SESSION_MANAGER=none
+
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi")
     run "${base[@]}" bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3395,7 +3055,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-write PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3421,7 +3081,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-stale PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3446,7 +3106,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-reuse PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3473,7 +3133,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-reject PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3509,7 +3169,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-force PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3545,7 +3205,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-ancestor PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3586,7 +3246,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-install PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3637,7 +3297,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-indep PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none \
+         \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -3666,41 +3326,6 @@ CURL
         pixied_test_fail "state remains after --force --yes"
 }
 
-@test "concurrent runtime: force downgrades the resident zellij session check" {
-    local home="$PIXIED_TEST_ROOT/lease-zellij-force-home"
-    local data="$PIXIED_TEST_ROOT/lease-zellij-force-data"
-    local config="$PIXIED_TEST_ROOT/lease-zellij-force-config"
-    local state="$PIXIED_TEST_ROOT/lease-zellij-force-state"
-    mkdir -p "$home"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-zellij-force \
-        PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
-    assert_success
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-zellij-force \
-        PIXIED_FAKE_ZELLIJ_REMAINS=1 \
-        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
-        bash "$data/pixied/bin/pixied" uninstall --yes
-    assert_failure 1
-    assert_output --partial 'cannot uninstall while the managed Zellij session'
-    [ -f "$state/pixied/machines/lease-zellij-force/state" ] ||
-        pixied_test_fail "state was removed while the Zellij session was active"
-
-    run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
-        XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=lease-zellij-force \
-        PIXIED_FAKE_ZELLIJ_REMAINS=1 \
-        PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
-        bash "$data/pixied/bin/pixied" uninstall --yes --force
-    assert_success
-    assert_output --partial "uninstalling with --force while the managed Zellij session 'pixied' is still active"
-    [ ! -e "$state/pixied/machines/lease-zellij-force/state" ] ||
-        pixied_test_fail "state remains after a forced resident-session uninstall"
-}
-
 # US-101-3
 @test "saved installation paths are restored on reinstall" {
     local home="$PIXIED_TEST_ROOT/phase2-path-home"
@@ -3713,13 +3338,13 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data_one" \
         XDG_CONFIG_HOME="$config_one" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-path PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-path  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_success
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data_two" \
         XDG_CONFIG_HOME="$PIXIED_TEST_ROOT/phase2-path-config-two" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-path PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-path  \
         PIXIED_PIXI_BINARY_SOURCE="$fake_source" bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_success
     [ -x "$data_one/pixied/bin/pixi" ] || pixied_test_fail "saved data path was not reused"
@@ -3737,7 +3362,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-legacy-sync PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-legacy-sync  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
     assert_success
@@ -3747,7 +3372,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-legacy-sync PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-legacy-sync  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
     assert_success
@@ -3767,7 +3392,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-external-legacy PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-external-legacy  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
     assert_success
@@ -3807,7 +3432,7 @@ CURL
     mkdir -p "$home" "$data/pixied"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-created PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-created  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_success
@@ -3827,7 +3452,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
         PIXIED_PIXI_HOME="$existing_pixi" PIXIED_COMMAND_LOG="$log" \
-        PIXIED_MACHINE_ID=phase2-unmanaged-pixi PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-unmanaged-pixi  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_failure
@@ -3835,8 +3460,6 @@ CURL
     assert_equal 'keep this Pixi home' "$(<"$existing_pixi/marker")"
     [ ! -e "$existing_pixi/bin/direnv" ] ||
         pixied_test_fail "unverified Pixi home received direnv"
-    [ ! -e "$existing_pixi/bin/zellij" ] ||
-        pixied_test_fail "unverified Pixi home received zellij"
     if grep -Fq -- 'global install' "$log"; then
         pixied_test_fail "Global provision ran for an unverified Pixi home"
     fi
@@ -3849,7 +3472,7 @@ CURL
     mkdir -p "$home"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=phase2-checksum PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase2-checksum  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_PIXI_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install
@@ -3869,7 +3492,7 @@ CURL
     ln -s "$target" "$log"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=command-log PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=command-log  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" bash "$PIXIED_REPO_ROOT/bin/pixied" install
     assert_failure 1
@@ -3889,7 +3512,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:$PATH" \
-        PIXIED_MACHINE_ID=version-official PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=version-official  \
         PIXIED_PIXI_VERSION=0.99.0 PIXIED_PIXI_ASSET_PATH="$asset" \
         PIXIED_FAKE_SHA256="$(sha256sum "$asset" | cut -d' ' -f1)" \
         PIXIED_COMMAND_LOG="$log" \
@@ -3926,7 +3549,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:$PATH" \
-        PIXIED_MACHINE_ID=latest-version PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=latest-version  \
         PIXIED_PIXI_VERSION=latest PIXIED_PIXI_LATEST_TAG=v0.99.0 \
         PIXIED_PIXI_ASSET_PATH="$asset" \
         PIXIED_FAKE_SHA256="$(sha256sum "$asset" | cut -d' ' -f1)" \
@@ -3949,7 +3572,7 @@ CURL
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:$PATH" \
-        PIXIED_MACHINE_ID=latest-api PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=latest-api  \
         PIXIED_PIXI_VERSION=latest PIXIED_FAKE_LATEST_RESPONSE='{"tag_name":"v0.99.0"}' \
         PIXIED_PIXI_ASSET_PATH="$asset" \
         PIXIED_FAKE_SHA256="$(sha256sum "$asset" | cut -d' ' -f1)" \
@@ -3971,7 +3594,7 @@ CURL
         mkdir -p "$home"
         run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
             PATH="$fake_bin:$PATH" \
-            PIXIED_MACHINE_ID="latest-api-invalid-$index" PIXIED_SESSION_MANAGER=none \
+            PIXIED_MACHINE_ID="latest-api-invalid-$index"  \
             PIXIED_PIXI_VERSION=latest PIXIED_FAKE_LATEST_RESPONSE="$response" \
             bash "$PIXIED_REPO_ROOT/bin/pixied" install
         assert_failure 1
@@ -3995,7 +3618,7 @@ CASES
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
         PATH="$fake_bin:$PATH" \
-        PIXIED_MACHINE_ID=version-mismatch PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=version-mismatch  \
         PIXIED_PIXI_VERSION=0.99.0 \
         PIXIED_PIXI_ASSET_PATH="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_FAKE_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
@@ -4019,7 +3642,7 @@ CASES
     tar -czf "$archive" -C "$archive_root" pixi
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_STATE_HOME="$state" \
-        PIXIED_MACHINE_ID=archive-safety PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=archive-safety  \
         PIXIED_PIXI_VERSION=0.99.0 PIXIED_PIXI_ASSET_PATH="$archive" \
         PIXIED_PIXI_SHA256="$(sha256sum "$archive" | cut -d' ' -f1)" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install
@@ -4231,7 +3854,7 @@ CASES
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase4-sync PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase4-sync  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -4364,7 +3987,7 @@ CASES
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase4-status PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase4-status  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -4409,7 +4032,7 @@ CASES
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" \
         XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID=phase4-lock PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase4-lock  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
@@ -4444,7 +4067,7 @@ CASES
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_HOME_MODE=local \
-        PIXIED_MACHINE_ID=phase4-local-lock PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID=phase4-local-lock  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -4760,14 +4383,12 @@ CASES
 # @description Build a non-active first deployment that can later be re-spawned as an active runtime.
 # @arg $1 string Test-scoped prefix used for all scratch paths.
 # @arg $2 string Machine id written into the generated state file.
-# @arg $3 string Session manager for the fixture (default: none).
-# @set ah_home ah_data ah_config ah_state ah_log ah_existing ah_data_dir ah_state_file ah_id ah_session Globals for the active-runtime helpers.
+# @set ah_home ah_data ah_config ah_state ah_log ah_existing ah_data_dir ah_state_file ah_id Globals for the active-runtime helpers.
 pixied_active_fixture() {
-    local prefix=$1 id=$2 session_manager=${3:-none}
+    local prefix=$1 id=$2
     local fake_bin="$PIXIED_TEST_ROOT/${prefix}-fakebin"
     ah_prefix=$prefix
     ah_id=$id
-    ah_session=$session_manager
     ah_home="$PIXIED_TEST_ROOT/${prefix}-home"
     ah_data="$PIXIED_TEST_ROOT/${prefix}-data"
     ah_config="$PIXIED_TEST_ROOT/${prefix}-config"
@@ -4777,14 +4398,13 @@ pixied_active_fixture() {
     ah_data_dir="$ah_data/pixied"
     ah_state_file="$ah_state/pixied/machines/$id/state"
     mkdir -p "$ah_home" "$ah_existing/bin" "$fake_bin"
-    ln -sf "$PIXIED_REPO_ROOT/tests/fakes/external-command" "$fake_bin/zellij"
     printf 'pre-existing Pixi environment\n' >"$ah_existing/bin/pixi"
     : >"$ah_log"
     run env HOME="$ah_home" PATH="$fake_bin:$PATH" PIXI_HOME="$ah_existing" \
         XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" XDG_STATE_HOME="$ah_state" \
-        PIXIED_MACHINE_ID="$id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER="$session_manager" \
+        PIXIED_MACHINE_ID="$id" PIXIED_HOME_MODE=local \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
-        PIXIED_COMMAND_LOG="$ah_log" PIXIED_FAKE_ZELLIJ_SESSION_NAME=pixied \
+        PIXIED_COMMAND_LOG="$ah_log" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
     [ -f "$ah_state_file" ] || pixied_test_fail "fixture state file is missing: $ah_state_file"
@@ -4797,7 +4417,7 @@ pixied_active_run() {
     # creates leases explicitly when it needs them.
     env HOME="$ah_home" PATH="$PIXIED_TEST_ROOT/${ah_prefix}-fakebin:$PATH" PIXI_HOME="$ah_existing" \
         XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" XDG_STATE_HOME="$ah_state" \
-        PIXIED_MACHINE_ID="$ah_id" PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER="$ah_session" \
+        PIXIED_MACHINE_ID="$ah_id" PIXIED_HOME_MODE=local \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$ah_log" PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$ah_state_file" \
         "$@"
@@ -4822,7 +4442,7 @@ pixied_assert_no_deploy_residue() {
 
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$home/.config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=missing PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
         PIXIED_RUNTIME_STATE_FILE="$bad_state" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
@@ -4832,7 +4452,7 @@ pixied_assert_no_deploy_residue() {
 
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$home/.config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=missing PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
         PIXIED_RUNTIME_STATE_FILE="$bad_state" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
@@ -4863,7 +4483,7 @@ pixied_assert_no_deploy_residue() {
     run env HOME="$ah_home" PATH="$PIXIED_TEST_ROOT/ar-forged-fakebin:$PATH" \
         PIXI_HOME="$ah_existing" XDG_DATA_HOME="$ah_data" XDG_CONFIG_HOME="$ah_config" \
         XDG_STATE_HOME="$ah_state" PIXIED_MACHINE_ID=ar-forged PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$ah_log" PIXIED_ACCOUNT_HOME=/forged/path \
         PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$ah_state_file" \
         bash "$ah_data_dir/bin/pixied" install --yes
@@ -4927,7 +4547,6 @@ machine_id=forged
 account_home=/forged/account
 home_mode=local
 local_home=/forged/local
-session_manager=none
 data_dir=/forged/data
 config_dir=/forged/config
 state_dir=/forged/state
@@ -4936,7 +4555,7 @@ pixi_home=/forged/pixi
 EOF
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
         PIXIED_RUNTIME_STATE_FILE="$forged" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
@@ -4945,7 +4564,7 @@ EOF
 
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
         PIXIED_RUNTIME_STATE_FILE="$forged" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" uninstall --yes
@@ -4960,7 +4579,6 @@ machine_id=real
 account_home=/real/account
 home_mode=local
 local_home=/real/local
-session_manager=none
 data_dir=/wrong/state/dir
 config_dir=/wrong/config
 state_dir=/wrong/state/dir
@@ -4969,7 +4587,7 @@ pixi_home=/wrong/pixi
 EOF
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
         PIXIED_RUNTIME_STATE_FILE="$mismatched" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
@@ -4984,7 +4602,6 @@ machine_id=real
 account_home=/real/account
 home_mode=local
 local_home=/real/local
-session_manager=none
 data_dir=/real/data
 config_dir=/real/config
 state_dir=/real/data
@@ -4994,7 +4611,7 @@ removed_key=/real/removed
 EOF
     run env HOME="$real_home" XDG_DATA_HOME="$real_data" XDG_CONFIG_HOME="$real_home/.config" \
         XDG_STATE_HOME="$real_state" PIXIED_MACHINE_ID=real PIXIED_HOME_MODE=local \
-        PIXIED_SESSION_MANAGER=none PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         PIXIED_COMMAND_LOG="$log" PIXIED_RUNTIME_HOOK_ACTIVE=1 \
         PIXIED_RUNTIME_STATE_FILE="$unknown_key" \
         bash "$PIXIED_REPO_ROOT/bin/pixied" install --yes
@@ -5005,7 +4622,7 @@ EOF
 @test "active runtime: identity-changing options are rejected" {
     pixied_active_fixture ar-idopt ar-idopt
     local opt
-    for opt in '--machine-id other' '--home-mode nfs' '--session-manager zellij' '--local-home /forged/local' '--pixi-home /forged/pixi'; do
+    for opt in '--machine-id other' '--home-mode nfs' '--local-home /forged/local' '--pixi-home /forged/pixi'; do
         run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes $opt
         assert_failure || pixied_test_fail "option '$opt' was not rejected"
         assert_output --partial 'active runtime rejects identity-changing option' ||
@@ -5028,7 +4645,7 @@ EOF
     pixied_active_fixture ar-delegate ar-delegate
     run pixied_active_run bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
-    assert_output --partial 'Runtime hook, dedicated Pixi environment, and session support are ready'
+    assert_output --partial 'Runtime hook and dedicated Pixi environment are ready'
     grep -Fq -- "account_home=$ah_home" "$ah_state_file" ||
         pixied_test_fail "state account home changed during active delegation"
     [ -f "$ah_config/pixied/runtime-hook.bash" ] ||
@@ -5064,8 +4681,8 @@ EOF
     [ ! -e "$ah_home/.local/bin/pixied" ] || pixied_test_fail "launcher was not removed"
     [ -d "$ah_home" ] || pixied_test_fail "account home was removed"
     [ -f "$ah_existing/bin/pixi" ] || pixied_test_fail "existing Pixi home was removed"
-    if command grep -Eq -- '^(zellij|systemctl|loginctl|sudo) ' "$ah_log"; then
-        pixied_test_fail "uninstall invoked a session-related command"
+    if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$ah_log"; then
+        pixied_test_fail "uninstall invoked a host service command"
     fi
 }
 
@@ -5075,26 +4692,6 @@ EOF
     assert_success
     assert_output --partial "Run 'exit' to leave this runtime shell"
     [ ! -e "$ah_home/.local/bin/pixied" ] || pixied_test_fail "launcher was not removed"
-}
-
-@test "active runtime: zellij install and uninstall safety" {
-    pixied_active_fixture ar-zellij ar-zellij zellij
-    [ -x "$ah_data_dir/pixi/bin/zellij" ] || pixied_test_fail "dedicated zellij is missing from fixture"
-
-    run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes
-    assert_success
-    assert_output --partial 'Active runtime installation kept the verified identity intact'
-
-    run pixied_active_run bash "$ah_data_dir/bin/pixied" install --yes --session-manager none
-    assert_failure
-    assert_output --partial 'active runtime rejects identity-changing option: --session-manager'
-
-    run pixied_active_run ZELLIJ=1 \
-        bash "$ah_data_dir/bin/pixied" uninstall --yes
-    assert_failure
-    assert_output --partial 'cannot uninstall from an attached Zellij runtime session'
-    [ -e "$ah_state_file" ] || pixied_test_fail "state was removed while the Zellij runtime was active"
-    [ -e "$ah_data_dir" ] || pixied_test_fail "data was removed while the Zellij runtime was active"
 }
 
 @test "NFS machines isolate payloads, locks and leases while sharing the dispatcher" {
@@ -5119,7 +4716,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5135,7 +4732,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_b"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5186,7 +4783,7 @@ EOF
         printf "exit\n" |
             env -i PATH="$1" HOME="$2" XDG_STATE_HOME="$3" \
                 PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$4" \
-                PIXIED_MACHINE_ID="$5" PIXIED_AUTO_ATTACH=none \
+                PIXIED_MACHINE_ID="$5" \
                 script -qec "bash \"$6\" shell" /dev/null
     ' bash "$PATH" "$account_home" "$state" "$local_home_b" "$machine_b" "$launcher"
     assert_success
@@ -5231,7 +4828,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5242,10 +4839,10 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_b"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
-        --session-manager none --machine-id "$machine_b" --yes
+        --machine-id "$machine_b" --yes
     assert_success
     [ -x "$data_b/bin/pixied" ] || pixied_test_fail 'fresh host did not deploy local payload'
     [ -f "$state_b" ] || pixied_test_fail 'fresh host did not create state'
@@ -5284,7 +4881,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5300,10 +4897,10 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_b"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
-        --session-manager none --machine-id "$machine_b" --yes
+        --machine-id "$machine_b" --yes
     assert_success
 
     cp -- "$state_b" "$state_b.managed"
@@ -5361,17 +4958,17 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_b"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
-        --session-manager none --machine-id "$machine_b" --yes
+        --machine-id "$machine_b" --yes
     assert_success
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
@@ -5418,7 +5015,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
             set -Eeuo pipefail
@@ -5460,7 +5057,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5507,7 +5104,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5543,7 +5140,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5574,7 +5171,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5583,10 +5180,10 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_b"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$launcher" install --home-mode nfs --local-home "$local_home_b" \
-        --session-manager none --machine-id "$machine_b" --yes
+        --machine-id "$machine_b" --yes
     assert_success
     [ -x "$data_b/bin/pixied" ] || pixied_test_fail 'legacy peer install did not deploy payload'
     [ -f "$state/pixied/machines/$machine_b/state" ] ||
@@ -5606,7 +5203,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5636,7 +5233,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5670,7 +5267,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5683,7 +5280,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$data/bin/pixied" install --yes
     assert_success
@@ -5713,7 +5310,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_a" \
-        PIXIED_MACHINE_ID="$machine_a" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_a"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5723,7 +5320,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
-        PIXIED_MACHINE_ID="$machine_b" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_b"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_failure
@@ -5747,7 +5344,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_DATA_HOME="$shared_base" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5778,7 +5375,7 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash "$PIXIED_REPO_ROOT/install-local.sh" --yes
     assert_success
@@ -5793,7 +5390,7 @@ EOF
     foreign_lease=$(pixied_fake_lease "$lease_dir" "$foreign_pid" "$foreign_comm" run 'sleep 60')
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$state_file" \
         bash "$data/bin/pixied" install --yes
     assert_success
@@ -5809,7 +5406,7 @@ EOF
     chmod 0700 "$lease_dir"
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" PIXIED_SESSION_MANAGER=none \
+        PIXIED_MACHINE_ID="$machine_id"  \
         bash -c '
         lease_dir=$1
         comm=$(cat "/proc/$$/comm" 2>/dev/null || ps -o comm= -p "$$")
@@ -5818,7 +5415,7 @@ EOF
         chmod 0600 "$lease"
         env -i PATH="$PATH" HOME="$2" XDG_STATE_HOME="$3" \
             PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$4" \
-            PIXIED_MACHINE_ID="$5" PIXIED_SESSION_MANAGER=none \
+            PIXIED_MACHINE_ID="$5"  \
             PIXIED_RUNTIME_HOOK_ACTIVE=1 PIXIED_RUNTIME_STATE_FILE="$6" \
             bash "$7" uninstall --yes
     ' bash "$lease_dir" "$account_home" "$state" "$local_home" \

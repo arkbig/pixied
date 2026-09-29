@@ -8,7 +8,6 @@ printf '%s %s\n' "$PIXIED_FAKE_NAME" "$*" >>"${PIXIED_COMMAND_LOG:?}"
 
 case "$PIXIED_FAKE_NAME" in
 pixi) printf 'pixi 0.0.0-fake\n' ;;
-zellij) ;;
 *)
     printf 'unknown fake command: %s\n' "$PIXIED_FAKE_NAME" >&2
     exit 2

@@ -24,12 +24,12 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 
 ### 対象
 
-- 利用者単位の専用Pixi binary、`PIXI_HOME`、direnv、任意のZellijの提供
+- 利用者単位の専用Pixi binary、`PIXI_HOME`、direnvの提供
 - グローバルPixi環境を土台にしたプロジェクトPixi環境の自動有効化
 - DevContainerまたはDockerでプロジェクトPixi環境を構築する生成物の提供
 - `local`と`nfs`のhome mode
 - Bash/zsh起動時のruntime hook
-- 専用環境での対話shell、Zellijセッション、commandの実行
+- 専用環境での対話shellとcommandの実行
 - NFS modeでの限定的なshell設定同期
 - PixiEdenが所有する資源の安全なuninstall
 - `pixied generate`によるプロジェクト向け設定・Dockerfileの生成
@@ -48,29 +48,24 @@ PixiEdenは、共有または低速なhomeを使う非特権ユーザーでも�
 
 - 対応するLinux環境で、利用者の権限だけで専用runtimeをインストールして利用できる。
 - Bashまたはzsh hookの評価後、専用の`HOME`、`PIXI_HOME`、`PATH`が有効になり、既存Pixi環境を参照しない。
-- `pixied run <command>`をTTYやZellijの有無にかかわらず実行でき、commandの終了statusを返す。
+- `pixied run <command>`をTTYの有無にかかわらず実行でき、commandの終了statusを返す。
 - NFS modeの同期対象が8つのshell設定ファイルに限定され、起動時に`account→local`の一方向`reconcile`だけが行われる。
-- Zellijを選択した場合、`pixied shell`で既存セッションへ再接続するか、初回セッションを作成できる。
 - `pixied generate direnv`で、プロジェクトディレクトリに入ったときだけPixiEdenの専用Pixi上のプロジェクト環境を有効化できる。生成された`.envrc`は`pixied generate direnv --print-envrc`を評価し、runtime hookまたは`pixied shell`/`pixied run`のPATHを使い、それ以外では生成時のCLI絶対pathを使う。hookの評価だけではNFS同期やsession起動を行わない。
 - `pixied generate devcontainer`または`dockerfile`で、同じプロジェクトPixi環境をコンテナ内に構築できる。DevContainerは`Dockerfile`と`devcontainer.json`だけを生成し、Pixi binaryを`ghcr.io/prefix-dev/pixi`から`mcr.microsoft.com/devcontainers/base:noble`へコピーして`PIXI_HOME=/opt/pixi`とdetached environmentを設定する。projectのinstallとshell hookはworkspace mount後の`postCreateCommand`で実行する。DevContainer生成では`.env`やentrypointを使わず、既定では生成済みファイルを上書きせずエラーで終了し、`--force`で上書き（`<name>.bak`へ1世代backup）する。Dockerfile生成ではdefinitionとして`pixi.toml`を優先し、なければ`pyproject.toml`を使い、lockfileはoptionalとする。
 - `pixied uninstall`を再実行しても、PixiEdenが所有しない資源や利用者の既存環境を削除しない。
 
 ## 再現範囲
 
-machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、`pixi.lock`、生成した`.envrc`・DevContainer・Dockerfile、NFSのstate registryとaccount側dispatcher、およびNFS modeで許可した8つのshell設定ファイルである。state file、runtime payload、短時間lock、lease、Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`、Zellijの実行中sessionは共有せず、各machineで再構築する。
+machine間で共有または再現されるのは、PixiEdenの設定、固定されたPixi version、プロジェクトの`pixi.toml`または`pyproject.toml`、`pixi.lock`、生成した`.envrc`・DevContainer・Dockerfile、NFSのstate registryとaccount側dispatcher、およびNFS modeで許可した8つのshell設定ファイルである。state file、runtime payload、短時間lock、lease、Pixiのcache、解決済みバイナリ、machine-localな`PIXI_HOME`は共有せず、各machineで再構築する。
 
-したがってPixiEdenが保証するのは「同じ定義から専用runtimeとプロジェクト環境を再構築できること」であり、別machineへZellijの画面や未同期の作業状態を移動することではない。Zellijの再接続は同じmachine上でsessionが残っている場合に限る。
+したがってPixiEdenが保証するのは「同じ定義から専用runtimeとプロジェクト環境を再構築できること」であり、runtime外の未同期の作業状態をmachine間で移動することではない。
 
 ## 動作モードと権限
 
-|home mode|session manager|専用runtime|プロジェクトPixi|Zellij永続化|必要な条件・権限|
-|---|---|---|---|---|---|
-|`local`|`none`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|なし|昇格権限不要。|
-|`local`|`zellij`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|同じmachineのsessionへ再接続|runtime内から専用sessionへ直接attach。昇格権限不要。|
-|`nfs`|`none`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|なし|local homeの作成・書込み権限が必要。昇格権限不要。|
-|`nfs`|`zellij`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|同じmachineのsessionへ再接続|local homeの書込み権限が必要。runtime内から専用sessionへ直接attach。昇格権限不要。|
-
-`zellij`ではPixiEden runtime内から`zellij attach --create pixied`を直接実行する。親shellの環境を継承するため、`SSH_AUTH_SOCK`なども利用できる。`none`では専用interactive Bashを起動し、Zellijを起動しない。
+|home mode|専用runtime|プロジェクトPixi|必要な条件・権限|
+|---|---|---|---|
+|`local`|通常home上の専用領域で利用|direnv、DevContainer、Dockerfileを利用可能|昇格権限不要。|
+|`nfs`|machine-local homeと専用`PIXI_HOME`で利用|direnv、DevContainer、Dockerfileを利用可能|local homeの作成・書込み権限が必要。昇格権限不要。|
 
 ## アクティブruntime内の管理操作（受入条件）
 
@@ -79,10 +74,8 @@ machine間で共有または再現されるのは、PixiEdenの設定、固定�
 - AC-1: アクティブruntimeでは**検証済みstate file**をidentityのsource of truthとし、identityを`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`から再計算しない。
 - AC-2: アクティブruntimeの検出は`PIXIED_RUNTIME_HOOK_ACTIVE=1`と絶対正規化pathである`PIXIED_RUNTIME_STATE_FILE`の両方を要し、いずれか一方だけではアクティブとみなさない。
 - AC-3: state fileが不在または検証不能な場合、install/uninstallは`active runtime state is missing or unverifiable; PixiEden refuses to change identity from an active runtime; re-source the runtime from a valid deployment`を出力して失敗する。
-- AC-4: アクティブruntime内でidentityを変更するoption（`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`）を指定すると、`active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')`を出力して却下する。
-- AC-5: reinstallでsession managerを変更しようとすると`cannot change session manager during reinstall; run uninstall first`を出力して却下し、先にuninstallするよう要求する。
-- AC-6: `zellij`のアクティブruntimeからはuninstallできず、`cannot uninstall from an attached Zellij runtime session; detach the managed Zellij session (exit the session) and rerun the uninstall`を出力して却下する。
-- AC-7: install/uninstallは現在のsessionが保持する環境を変えずにstateを更新し、`exit`でruntime shellを抜けたあと再起動または再attachしたruntimeにのみ新しい設定を反映する。
+- AC-4: アクティブruntime内でidentityを変更するoption（`--home-mode`、`--local-home`、`--machine-id`、`--pixi-home`）を指定すると、`active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')`を出力して却下する。
+- AC-5: install/uninstallは現在のruntime shellが保持する環境を変えずにstateを更新し、`exit`でruntime shellを抜けたあと新しいshellを開始したruntimeにのみ新しい設定を反映する。
 
 ## トレーサビリティ
 

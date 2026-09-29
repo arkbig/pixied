@@ -59,7 +59,7 @@ tests/run.sh all
 
 - 全体像は`pixied help`、各コマンドのoptionは`pixied <command> --help`で確認する。
 - `install`と`install-local.sh`と`install.sh`は同じinstall optionを受け付ける。
-- `uninstall --help`で`--yes`と`--force`の分担を確認する。`--force`は実行中runtimeと常駐sessionの拒否を警告へ降格するだけで、最終確認は`--yes`とは独立である。
+- `uninstall --help`で`--yes`と`--force`の分担を確認する。`--force`は実行中runtimeとleaseの拒否を警告へ降格するだけで、最終確認は`--yes`とは独立である。
 - `generate --help`で形式ごとの`--force`と`--print-envrc`の扱いを確認する。
 - 実行時の判断材料(設定確認、非local警告、同期警告、lease警告、所有検証エラー)は標準エラー出力の警告文とエラー文で案内する。
 
@@ -77,7 +77,7 @@ tests/run.sh all
 
 NFSのdistributionとhostのruntimeは分離する。公開Releaseのinstallはarchiveを検証し、共有state rootの下へimmutableなversionをpublishし、`current`をatomicに選択し、同じ検証済みsourceを実行hostのlocal payloadへdeployする。account側のstable dispatcherは`install`、`version`、`prune`、`uninstall`などのmanagement commandを選択済みReleaseへ振り分ける。
 
-runtime commandはcurrent machineのlocal payload、Pixi home、cache、session resourceを使い、shared Release treeをsourceしない。そのため、別hostが新しい`current`をpublishしても、hostは検証済みのlocal payloadを使ってruntimeを継続できる。
+runtime commandはcurrent machineのlocal payload、Pixi home、cache、runtime resourceを使い、shared Release treeをsourceしない。そのため、別hostが新しい`current`をpublishしても、hostは検証済みのlocal payloadを使ってruntimeを継続できる。
 
 別hostの`pixied install`はshared`current`を解決・検証してlocalへdeployし、archiveをnetworkからdownloadしない。`pixied version`はshared Releaseとlocal payloadを両方表示する。不一致、Release metadataが無いlegacy state、未installは情報表示として扱い、runtime commandはlocal payloadを続行して自動更新しない。
 
@@ -91,8 +91,7 @@ local homeの作成状態はNFS同期の有無とは別である。`nfs`modeで�
 
 |分類|環境変数|用途|
 |---|---|---|
-|install設定|`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`、`PIXIED_SESSION_MANAGER`|CLI optionと同じinstall設定を環境変数から指定する。|
-|runtime設定|`PIXIED_AUTO_ATTACH`|`shell`/`hook`の`--auto-attach`と同じ自動attach設定を環境変数から指定する。`auto`または`none`だけを受け付ける。|
+|install設定|`PIXIED_HOME_MODE`、`PIXIED_LOCAL_HOME`|CLI optionと同じinstall設定を環境変数から指定する。|
 |advanced設定|`PIXIED_MACHINE_ID`|machine stateの識別子を明示する。安全なpath segmentでなければ停止する。|
 |Pixi version設定|`PIXIED_PIXI_VERSION`、`PIXIED_PIXI_SHA256`|Pixi versionの選択とasset checksumの明示を行う。|
 |release設定|`PIXIED_RELEASE_URL`|remote installerが取得するrelease archiveのURLを変更する。|
@@ -112,10 +111,10 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`lib/options.sh`|CLI、公開環境変数、state、自動検出、既定値の優先順位と確認。|
 |`lib/state.sh`|許可keyだけを扱うstate parser、path・値・hashの検証、短時間lock、atomic write。|
 |`lib/lease.sh`|実行中runtimeのlease取得・解放、staleなleaseの自動除去、他runtime生存の判定。|
-|`lib/pixi.sh`|専用Pixi binaryの取得・checksum検証、専用`PIXI_HOME`でのPixi実行、Global executableの検証。|
+|`lib/pixi.sh`|専用Pixi binaryの取得・checksum検証、専用`PIXI_HOME`でのPixi実行、direnvのprovision。|
 |`lib/hook.sh`|Bash/zshからsourceできるruntime hookと、hookをsourceするshell codeの生成。|
 |`lib/sync.sh`|NFS modeの8ファイルallowlist、`account→local`の一方向`reconcile`。|
-|`lib/session.sh`|child command、Zellij session、runtime内のdirect attach。|
+|`lib/session.sh`|child commandとruntime内の対話Bashの起動。|
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
 |`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
 
@@ -123,13 +122,13 @@ installはaccount home、home mode、local home、XDG pathを副作用の前に�
 
 machine stateは共有registry内の`PIXIED_STATE_DIR/machines/<machine-id>/state`に保存し、短時間lockは`nfs`ではmachine state directory内、`local`ではstate root内に保存する。実行中runtimeの生存は`leases/`配下のlease fileで表す。stateをshell codeとしてsourceせず、既知のkey、値の型、canonical path、owner、hashを検証してから更新・実行・削除する。`PIXIED_LOCAL_HOME`とその親directoryはPixiEdenの削除対象外であり、他machineのstateが参照する共有resourceも保持する。
 
-runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。`pixied shell`または`pixied run`がchild commandまたはsessionを待機し、runtime開始時に`account→local`の一方向`reconcile`だけを行う。
+runtime hookはstateとartifactを検証して環境変数とPATHを設定し、対話shellで専用direnv hookを評価するだけである。`pixied shell`または`pixied run`が対話Bashまたはchild commandを待機し、runtime開始時に`account→local`の一方向`reconcile`だけを行う。
 
 ## テストとrelease検証
 
-`tests/run.sh`のBats統合テストはfake Pixi、Zellij、downloadを使い、hostの既存環境を変更せずに通常経路と失敗経路を検証する。
+`tests/run.sh`のBats統合テストはfake Pixi、download、専用runtimeを使い、hostの既存環境を変更せずに通常経路と失敗経路を検証する。
 
-実環境の検証は`tests/e2e/run-multipass.sh`へ集約する。使い捨てUbuntu VMへrelease archiveをinstallし、実Pixi、実direnv、実Zellij、PTY、同一machine上のsession再接続を検証する。
+実環境の検証は`tests/e2e/run-multipass.sh`へ集約する。使い捨てUbuntu VMへrelease archiveをinstallし、実Pixi、実direnv、direct interactive Bash、PTYを検証する。
 
 ## Release archiveの作成と検証
 

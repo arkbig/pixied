@@ -9,13 +9,12 @@ bash tests/run.sh
 ```
 
 The suite uses Bats fake commands, so it does not call or modify the host's
-Pixi or Zellij. Paths and command logs are kept in test-only temporary
-directories.
+Pixi. Paths and command logs are kept in test-only temporary directories.
 
 ## Multipass E2E
 
-Real Pixi, direct Zellij attach, PTY handling, and session persistence are
-tested in a disposable Multipass VM:
+Real Pixi, real direnv, direct interactive Bash through a PTY, and a background
+Pixi task surviving SIGHUP are tested in a disposable Multipass VM:
 
 ```sh
 ./tests/e2e/run-multipass.sh
@@ -56,9 +55,10 @@ multipass.exe delete --purge pixied-e2e-<timestamp>-<pid>
 ```
 
 Docker remains useful for optional lightweight smoke tests and fake contract
-checks, but no separate Docker harness is added for real Zellij or PTY behavior.
+checks, but no separate Docker harness is added for real Pixi or PTY behavior.
 Keeping real-environment checks in one Multipass runner limits the maintenance
 surface to Bats and one E2E runner.
 
-The current runner covers the release archive, local home, and direct Zellij
-session path. NFS remains a separate E2E item for its respective phase.
+The current runner covers the release archive, local home, real direnv hook,
+direct shell path, and a nohup Pixi task. NFS remains a separate E2E item for
+its respective phase.

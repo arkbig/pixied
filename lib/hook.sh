@@ -37,9 +37,9 @@ _pixied_runtime_hook() {
         return 0
     fi
     local state_file state_output pixied_cli_path
-    local key value account_home machine_id home_mode local_home session_manager
+    local key value account_home machine_id home_mode local_home
     local data_dir config_dir state_dir command_bin pixi_home pixi_binary_path
-    local direnv_path zellij_path hook_shell
+    local direnv_path hook_shell
     local path_result path_entry direnv_hook
 RUNTIME_HEAD
         printf '    state_root=%s\n' "$state_dir_literal"
@@ -71,7 +71,6 @@ RUNTIME_HEAD
     machine_id=""
     home_mode=""
     local_home=""
-    session_manager=""
     data_dir=""
     config_dir=""
     state_dir=""
@@ -79,7 +78,6 @@ RUNTIME_HEAD
     pixi_home=""
     pixi_binary_path=""
     direnv_path=""
-    zellij_path=""
     while IFS='=' read -r key value; do
         # This is the activation subset; the child CLI validates the full
         # state through pixied_runtime_apply_state before this output exists.
@@ -88,7 +86,6 @@ RUNTIME_HEAD
         account_home) account_home=$value ;;
         home_mode) home_mode=$value ;;
         local_home) local_home=$value ;;
-        session_manager) session_manager=$value ;;
         data_dir) data_dir=$value ;;
         config_dir) config_dir=$value ;;
         state_dir) state_dir=$value ;;
@@ -96,18 +93,13 @@ RUNTIME_HEAD
         pixi_home) pixi_home=$value ;;
         pixi_binary_path) pixi_binary_path=$value ;;
         direnv_path) direnv_path=$value ;;
-        zellij_path) zellij_path=$value ;;
         esac
     done <<< "$state_output"
     if [ -z "$account_home" ] || [ -z "$machine_id" ] || [ -z "$home_mode" ] ||
-        [ -z "$local_home" ] || [ -z "$session_manager" ] || [ -z "$data_dir" ] ||
+        [ -z "$local_home" ] || [ -z "$data_dir" ] ||
         [ -z "$config_dir" ] || [ -z "$state_dir" ] || [ -z "$command_bin" ] ||
         [ -z "$pixi_home" ] || [ -z "$pixi_binary_path" ] || [ -z "$direnv_path" ]; then
         printf '%s\n' '[pixied] WARN runtime state is incomplete; run `pixied install` first.' >&2
-        return 0
-    fi
-    if [ "$session_manager" = zellij ] && [ -z "$zellij_path" ]; then
-        printf '%s\n' '[pixied] WARN runtime Zellij state is incomplete; run `pixied install` first.' >&2
         return 0
     fi
 
@@ -119,14 +111,12 @@ RUNTIME_HEAD
     fi
 
     export PIXIED_RUNTIME_HOOK_ACTIVE=1
-    export PIXIED_RUNTIME_HOOK_AUTOSTART=1
     export PIXIED_RUNTIME_STATE_FILE="$state_file"
     export PIXIED_STATE_FILE="$state_file"
     export PIXIED_MACHINE_ID="$machine_id"
     export PIXIED_ACCOUNT_HOME="$account_home"
     export PIXIED_HOME_MODE="$home_mode"
     export PIXIED_LOCAL_HOME="$local_home"
-    export PIXIED_SESSION_MANAGER="$session_manager"
     export PIXIED_DATA_DIR="$data_dir"
     export PIXIED_CONFIG_DIR="$config_dir"
     export PIXIED_STATE_DIR="$state_dir"
@@ -138,9 +128,6 @@ RUNTIME_HEAD
     export PIXI_CACHE_DIR="$pixi_home/cache"
     export PIXI_NO_PATH_UPDATE=1
 RUNTIME_BODY
-        if [ "${PIXIED_OPTION_CLI_SET[auto_attach]:-0}" -eq 1 ] && [ "${PIXIED_AUTO_ATTACH:-}" = none ]; then
-            printf '    export PIXIED_AUTO_ATTACH=%q\n' "$PIXIED_AUTO_ATTACH"
-        fi
         cat <<'RUNTIME_BODY'
 
     if [ -n "${ZSH_VERSION:-}" ]; then
@@ -190,16 +177,6 @@ PATH_RESULT
         ;;
     esac
 
-    case $- in
-    *i*)
-        if [ "${PIXIED_AUTO_ATTACH:-auto}" != none ] && [ -t 0 ] && [ -t 1 ] && [ -z "${CI:-}" ] &&
-            [ "$session_manager" = zellij ] && [ -z "${ZELLIJ:-}" ]; then
-            if ! PIXIED_RUNTIME_HOOK_AUTOSTART=1 "$pixied_cli_path" shell; then
-                printf '%s\n' '[pixied] WARN automatic runtime start failed.' >&2
-            fi
-        fi
-        ;;
-    esac
     return 0
 }
 _pixied_runtime_hook

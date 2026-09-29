@@ -67,22 +67,22 @@ NFS modeではaccount homeとmachine-local homeの間で必要なshell設定を�
 
 ## ADR-004
 
-session managerを任意とし、hookの自動起動を条件付きにする
+`pixied shell`は専用runtime内でdirect Bashを開始する
 
 **Status**: Accepted
 
 ### Context
 
-利用者には通常の対話Bashだけで十分な場合と、切断後に再接続できるZellijセッションが必要な場合がある。また、非対話commandをZellijへattachさせてはならない。
+hookの評価は呼び出し元shellの環境設定に限定し、対話shellの開始は明示的な`pixied shell`に限定する必要がある。`pixied run <command>`は非対話環境でもchild commandを直接実行する。
 
 ### Decision
 
-session managerは`none`または`zellij`から選択できるようにする。`pixied run <command>`は常に直接実行し、`pixied shell`と対話TTYからのhookだけがセッション接続の対象になる。
+runtime hookは検証済み環境変数とPATHを設定し、対話時だけ専用direnv hookを評価する。`pixied shell`は専用runtime内で対話Bashを開始し、`pixied run <command>`はchild commandをforegroundで実行する。
 
 ### Rejected alternatives
 
-- 常にZellijへ接続する案: 非対話commandやZellijを必要としない利用者の実行経路を奪う。
-- hookを常にshellへ進める案: CI、非対話shell、既存のZellij内で不要なセッションを起動する。
+- hookの評価時に対話shellを起動する案: shell設定の評価で予期しない子shellが起動し、CIや非対話shellの実行を妨げる。
+- `pixied shell`から別の常駐runtimeを管理する案: runtimeのlease、終了status、uninstall保護の責務が分散する。
 
 **Related**: [US-103](user-stories.ja.md#us-103)、[US-104](user-stories.ja.md#us-104)、[US-105](user-stories.ja.md#us-105)
 
@@ -139,7 +139,7 @@ current machineのstate、canonical path、owner、hashを検証し、PixiEden�
 
 ### Decision
 
-`pixied generate <devcontainer|dockerfile|direnv>`と`pixied generate direnv --print-envrc`を提供する。`direnv`は、生成時のCLI絶対pathまたは`pixied`がPATH上にある場合はそのcommandを使って専用Pixi runtimeからプロジェクトのshell hookを取得する。`--print-envrc`はactivation codeだけをstdoutへ出力し、ファイルは書き込まない。同期やsession起動は行わず、プロジェクト定義から再現可能なコンテナ定義を生成する。既存ファイルは明示確認なしに上書きしない。
+`pixied generate <devcontainer|dockerfile|direnv>`と`pixied generate direnv --print-envrc`を提供する。`direnv`は、生成時のCLI絶対pathまたは`pixied`がPATH上にある場合はそのcommandを使って専用Pixi runtimeからプロジェクトのshell hookを取得する。`--print-envrc`はactivation codeだけをstdoutへ出力し、ファイルは書き込まない。NFS同期やruntime起動は行わず、プロジェクト定義から再現可能なコンテナ定義を生成する。既存ファイルは明示確認なしに上書きしない。
 
 ### Rejected alternatives
 
@@ -179,13 +179,13 @@ Release tagをスクリプトでPIXIED_VERSIONと一致させる
 
 ### Decision
 
-アクティブruntime（runtime hookが`PIXIED_RUNTIME_HOOK_ACTIVE=1`と絶対正規化pathの`PIXIED_RUNTIME_STATE_FILE`を両方設定した状態）の管理操作では、runtimeがsourceした検証済みstate fileをidentityのsource of truthとする。`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からはidentityを再計算しない。state fileが不在または検証不能な場合は管理操作を拒否し、identity変更optionやreinstallでのsession manager変更、`zellij`のアクティブruntimeからのuninstallを却下する。install/uninstallはstateを更新するだけで現在のsession環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。
+アクティブruntime（runtime hookが`PIXIED_RUNTIME_HOOK_ACTIVE=1`と絶対正規化pathの`PIXIED_RUNTIME_STATE_FILE`を両方設定した状態）の管理操作では、runtimeがsourceした検証済みstate fileをidentityのsource of truthとする。`$HOME`、`PIXIED_STATE_FILE`、`PIXIED_MACHINE_STATE_DIR`からはidentityを再計算しない。state fileが不在または検証不能な場合は管理操作を拒否し、identity変更optionを却下する。install/uninstallはstateを更新するだけで現在のruntime shellの環境は変えず、`exit`後に新しいshellを開始したruntimeにのみ反映する。
 
 ### Rejected alternatives
 
 - `$HOME`と環境変数からidentityを再計算する案: NFS modeで`$HOME`がremapされるため、誤ったidentityを当てがう。
 - アクティブruntimeの検出を単一の環境変数のみで判定する案: 片方だけの設定（hook漏れや変数の残存）で誤検出し、検証されていないstateをsource of truthとして扱う。
-- アクティブruntimeでもidentity変更optionを許可する案: 実行中sessionが保持する環境とstateが一致しなくなり、再attach時に不整合が残る。
+- アクティブruntimeでもidentity変更optionを許可する案: 実行中runtime shellが保持する環境とstateが一致しなくなり、次回起動時に不整合が残る。
 
 ## ADR-010
 
@@ -195,7 +195,7 @@ NFSのstate registryとruntime payloadを分離する
 
 ### Context
 
-account homeはmachine間で共有される一方、Pixiのdata、config、cache、短時間lock、lease、Zellij sessionはmachineごとに独立して扱う必要がある。同じlocal home文字列がhostごとに異なるlocal filesystemを指す場合、path文字列の一致だけでは共有resourceと判定できない。
+account homeはmachine間で共有される一方、Pixiのdata、config、cache、短時間lock、leaseはmachineごとに独立して扱う必要がある。同じlocal home文字列がhostごとに異なるlocal filesystemを指す場合、path文字列の一致だけでは共有resourceと判定できない。
 
 ### Decision
 
@@ -221,7 +221,7 @@ leaseでruntime生存を分離し`--force`を警告降格に限定する
 
 ### Decision
 
-実行中runtimeの生存は`leases/`配下のlease fileで表し、短時間`lock`から分離する。`shell`/`run`は開始時にleaseを取得し、終了時に解放する。`install`/`uninstall`は`lease`を`sweep`し、staleなleaseは警告付きで自動除去する。他runtimeの生存中leaseがある場合、`install`は警告して継続し、`uninstall`は拒否する。`uninstall --force`は生存中leaseと常駐sessionの拒否を警告へ降格するだけで、`--yes`とは独立に最終確認を求める。
+実行中runtimeの生存は`leases/`配下のlease fileで表し、短時間`lock`から分離する。`shell`/`run`は開始時にleaseを取得し、終了時に解放する。`install`/`uninstall`は`lease`を`sweep`し、staleなleaseは警告付きで自動除去する。他runtimeの生存中leaseがある場合、`install`は警告して継続し、`uninstall`は拒否する。`uninstall --force`は生存中leaseの拒否を警告へ降格するだけで、`--yes`とは独立に最終確認を求める。
 
 ### Rejected alternatives
 

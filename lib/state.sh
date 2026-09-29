@@ -22,7 +22,6 @@ readonly PIXIED_STATE_KEY_ORDER=(
     account_home
     home_mode
     local_home
-    session_manager
     data_dir
     config_dir
     state_dir
@@ -32,8 +31,6 @@ readonly PIXIED_STATE_KEY_ORDER=(
     pixi_binary_hash
     direnv_path
     direnv_hash
-    zellij_path
-    zellij_hash
     runtime_hook_path
     runtime_hook_hash
     launcher_path
@@ -62,7 +59,7 @@ pixied_state_known_key() {
 # @exitcode 1 Otherwise
 pixied_state_path_key() {
     case "$1" in
-    account_home | local_home | data_dir | config_dir | state_dir | command_bin | pixi_home | pixi_binary_path | direnv_path | zellij_path | runtime_hook_path | launcher_path) return 0 ;;
+    account_home | local_home | data_dir | config_dir | state_dir | command_bin | pixi_home | pixi_binary_path | direnv_path | runtime_hook_path | launcher_path) return 0 ;;
     *) return 1 ;;
     esac
 }
@@ -97,13 +94,10 @@ pixied_state_validate_value_profile() {
     home_mode)
         case "$value" in local | nfs) ;; *) pixied_die "invalid state home mode: $value" ;; esac
         ;;
-    session_manager)
-        case "$value" in none | zellij) ;; *) pixied_die "invalid state session manager: $value" ;; esac
-        ;;
     created_data | created_pixi_home)
         case "$value" in 0 | 1) ;; *) pixied_die "invalid state creation flag: $key" ;; esac
         ;;
-    pixi_binary_hash | direnv_hash | zellij_hash | runtime_hook_hash | launcher_hash)
+    pixi_binary_hash | direnv_hash | runtime_hook_hash | launcher_hash)
         [ -z "$value" ] || [[ "$value" =~ ^[0-9a-f]{64}$ ]] ||
             pixied_die "invalid state hash: $key"
         ;;
@@ -266,7 +260,7 @@ pixied_state_get() {
 # @exitcode 1 When any key is missing
 pixied_state_require_core() {
     local key
-    for key in state_version machine_id account_home home_mode local_home session_manager pixi_home; do
+    for key in state_version machine_id account_home home_mode local_home pixi_home; do
         pixied_state_has "$key" || pixied_die "state key is missing: $key"
     done
 }
@@ -330,7 +324,6 @@ pixied_state_initialize_from_paths() {
     pixied_state_set account_home "$PIXIED_ACCOUNT_HOME"
     pixied_state_set home_mode "$PIXIED_HOME_MODE"
     pixied_state_set local_home "$PIXIED_LOCAL_HOME"
-    pixied_state_set session_manager "${PIXIED_SESSION_MANAGER:-zellij}"
     pixied_state_set data_dir "$PIXIED_DATA_DIR"
     pixied_state_set config_dir "$PIXIED_CONFIG_DIR"
     pixied_state_set state_dir "$PIXIED_STATE_DIR"
@@ -813,9 +806,6 @@ pixied_state_bootstrap_active_runtime() {
     PIXIED_COMMAND_BIN=${PIXIED_STATE[command_bin]}
     if ! pixied_options_is_explicit pixi_home; then
         PIXIED_PIXI_HOME=${PIXIED_STATE[pixi_home]}
-    fi
-    if ! pixied_options_is_explicit session_manager; then
-        PIXIED_SESSION_MANAGER=${PIXIED_STATE[session_manager]}
     fi
     # When machine id is not supplied explicitly it comes from the verified state.
     # An explicit --machine-id survives bootstrap so pixied_install_assert_active_identity

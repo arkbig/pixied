@@ -45,7 +45,7 @@ pixied_runtime_set_identity() {
 # @exitcode 1 When a required value is missing.
 pixied_runtime_apply_state() {
     local key
-    for key in state_version machine_id account_home home_mode local_home session_manager \
+    for key in state_version machine_id account_home home_mode local_home \
         data_dir config_dir state_dir command_bin pixi_home pixi_binary_path \
         pixi_binary_hash direnv_path direnv_hash runtime_hook_path runtime_hook_hash; do
         pixied_state_has "$key" || pixied_die "runtime state key is missing: $key"
@@ -55,7 +55,6 @@ pixied_runtime_apply_state() {
     export PIXIED_ACCOUNT_HOME=${PIXIED_STATE[account_home]}
     export PIXIED_HOME_MODE=${PIXIED_STATE[home_mode]}
     export PIXIED_LOCAL_HOME=${PIXIED_STATE[local_home]}
-    export PIXIED_SESSION_MANAGER=${PIXIED_STATE[session_manager]}
     export PIXIED_DATA_DIR=${PIXIED_STATE[data_dir]}
     export PIXIED_CONFIG_DIR=${PIXIED_STATE[config_dir]}
     export PIXIED_STATE_DIR=${PIXIED_STATE[state_dir]}
@@ -67,11 +66,6 @@ pixied_runtime_apply_state() {
     export PIXIED_DIRENV_HASH=${PIXIED_STATE[direnv_hash]}
     export PIXIED_RUNTIME_HOOK_PATH=${PIXIED_STATE[runtime_hook_path]}
     export PIXIED_RUNTIME_HOOK_HASH=${PIXIED_STATE[runtime_hook_hash]}
-    if pixied_state_has zellij_path; then
-        export PIXIED_ZELLIJ_PATH=${PIXIED_STATE[zellij_path]}
-    else
-        unset PIXIED_ZELLIJ_PATH
-    fi
 }
 
 # @description Validate runtime ownership, hashes, and generated artifact boundaries.
@@ -117,19 +111,6 @@ pixied_runtime_validate_state() {
         "${PIXIED_STATE[runtime_hook_hash]}"
     [ -x "${PIXIED_STATE[data_dir]}/bin/pixied" ] ||
         pixied_die "deployed PixiEden CLI is not executable"
-
-    if [ "${PIXIED_STATE[session_manager]}" = zellij ]; then
-        pixied_state_has zellij_path || pixied_die "runtime Zellij path is missing"
-        pixied_state_has zellij_hash || pixied_die "runtime Zellij hash is missing"
-        expected=$(pixied_canonical_path "${PIXIED_STATE[pixi_home]}/bin/zellij")
-        [ "${PIXIED_STATE[zellij_path]}" = "$expected" ] ||
-            pixied_die "runtime Zellij path is outside the dedicated Pixi home"
-        [ -n "${PIXIED_STATE[zellij_hash]}" ] ||
-            pixied_die "runtime Zellij hash is missing"
-        pixied_validate_owned_path "${PIXIED_STATE[zellij_path]}" "${PIXIED_STATE[zellij_hash]}"
-        [ -x "${PIXIED_STATE[zellij_path]}" ] ||
-            pixied_die "dedicated Zellij is not executable"
-    fi
 
     account_home=$(pixied_validate_home_directory "${PIXIED_STATE[account_home]}" "account home")
     local_home=$(pixied_validate_home_directory "${PIXIED_STATE[local_home]}" "local home")
@@ -369,23 +350,15 @@ pixied_runtime_run() {
     pixied_runtime_run_child "$@"
 }
 
-# @description Attach to a direct Zellij session or start an interactive Bash.
-# A session-less shell opens an interactive Bash child; Zellij mode attaches
-# directly unless the caller is already inside Zellij. The PIXIED_AUTO_ATTACH
-# environment variable or the --auto-attach flag overrides the auto-attach:
-# when the mode is none the runtime starts an interactive Bash without creating
-# or attaching to a Zellij session, so the session can be attached manually.
+# @description Start an interactive Bash in the prepared runtime.
 # A runtime lease is acquired for this process; a sibling runtime's lease never
-# blocks this start, and a second Zellij shell relies on 'attach --create' to
-# join or share the existing session.
+# blocks this start.
 #
-# @exitcode 0 When the child shell or attach process exits successfully.
-# @exitcode The child or attach process exit status, including 128 plus the
-# signal number when the process was terminated by a signal.
+# @exitcode 0 When the child shell exits successfully.
+# @exitcode The child shell exit status, including 128 plus the signal number
+# when the process was terminated by a signal.
 pixied_runtime_shell() {
-    local session_name
-    if [ "${PIXIED_RUNTIME_HOOK_ACTIVE:-0}" -eq 1 ] &&
-        [ "${PIXIED_RUNTIME_HOOK_AUTOSTART:-0}" -ne 1 ]; then
+    if [ "${PIXIED_RUNTIME_HOOK_ACTIVE:-0}" -eq 1 ]; then
         pixied_die "PixiEden is already active in this shell; use exit to leave it" \
             "$PIXIED_EXIT_FAILURE"
     fi
@@ -393,18 +366,5 @@ pixied_runtime_shell() {
     pixied_lease_acquire shell ""
 
     pixied_require_tty
-    if [ "${PIXIED_AUTO_ATTACH:-auto}" = none ]; then
-        if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
-            pixied_info "auto-attach disabled by --auto-attach none; attach manually with: $PIXIED_ZELLIJ_PATH attach --create pixied"
-        fi
-        pixied_runtime_run_child bash -i
-        return $?
-    fi
-    if [ "$PIXIED_SESSION_MANAGER" = none ] || [ -n "${ZELLIJ:-}" ]; then
-        pixied_runtime_run_child bash -i
-        return $?
-    fi
-
-    session_name=pixied
-    pixied_runtime_wait_for_child "$PIXIED_ZELLIJ_PATH" attach --create "$session_name"
+    pixied_runtime_run_child bash -i
 }

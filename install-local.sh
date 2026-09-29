@@ -29,7 +29,6 @@ Options:
     --yes                          Skip interactive confirmation prompts.
     --home-mode local|nfs          Select the account home mode.
     --local-home PATH              Set the machine-local home used by NFS mode.
-    --session-manager none|zellij  Select the runtime session manager.
     --machine-id ID                Set the machine-specific state identifier.
 
 The same installation options can be passed to `pixied install`.
@@ -227,7 +226,7 @@ pixied_install_deploy_source() {
 # @see pixied_options_parse
 pixied_install_local() {
     local destination state_exists
-    local bootstrap_home_mode bootstrap_local_home bootstrap_session_manager bootstrap_machine_id
+    local bootstrap_home_mode bootstrap_local_home bootstrap_machine_id
     local bootstrap_wizard_completed bootstrap_skip_wizard
     local release_stage="" release_version="" release_manifest_hash="" nfs_release=0
     local pixied_opt_var
@@ -238,7 +237,7 @@ pixied_install_local() {
     # into this process; those must not leak into the delegated CLI as if they were
     # explicit user overrides, or pixied_options_apply_state would skip restoring the
     # saved home mode from an existing installation.
-    for pixied_opt_var in PIXIED_HOME_MODE PIXIED_LOCAL_HOME PIXIED_SESSION_MANAGER PIXIED_MACHINE_ID PIXIED_PIXI_HOME; do
+    for pixied_opt_var in PIXIED_HOME_MODE PIXIED_LOCAL_HOME PIXIED_MACHINE_ID PIXIED_PIXI_HOME; do
         pixied_orig_opt[$pixied_opt_var]=${!pixied_opt_var:-}
     done
 
@@ -255,7 +254,6 @@ pixied_install_local() {
 
     # Resolve side-effect-free paths first so the state identity and the NFS
     # local-home candidate are known before the wizard or deployment runs.
-    pixied_options_apply_defaults
     pixied_resolve_paths 0
     state_exists=0
     if [ -e "$PIXIED_STATE_FILE" ] || [ -L "$PIXIED_STATE_FILE" ]; then
@@ -276,7 +274,6 @@ pixied_install_local() {
     pixied_resolve_paths 1
     bootstrap_home_mode=$PIXIED_HOME_MODE
     bootstrap_local_home=$PIXIED_LOCAL_HOME
-    bootstrap_session_manager=$PIXIED_SESSION_MANAGER
     bootstrap_machine_id=$PIXIED_MACHINE_ID
     bootstrap_skip_wizard=$bootstrap_wizard_completed
 
@@ -305,7 +302,7 @@ pixied_install_local() {
     # delegated CLI re-derives them and pixied_options_apply_state can restore the
     # saved configuration from an existing installation instead of treating the
     # derived value as an explicit override.
-    for pixied_opt_var in PIXIED_HOME_MODE PIXIED_LOCAL_HOME PIXIED_SESSION_MANAGER PIXIED_MACHINE_ID PIXIED_PIXI_HOME; do
+    for pixied_opt_var in PIXIED_HOME_MODE PIXIED_LOCAL_HOME PIXIED_MACHINE_ID PIXIED_PIXI_HOME; do
         if [ -n "${pixied_orig_opt[$pixied_opt_var]:-}" ]; then
             export "$pixied_opt_var=${pixied_orig_opt[$pixied_opt_var]}"
         else
@@ -323,7 +320,6 @@ pixied_install_local() {
     if [ "$bootstrap_skip_wizard" -eq 1 ]; then
         delegate_args+=(
             --home-mode "$bootstrap_home_mode"
-            --session-manager "$bootstrap_session_manager"
             --machine-id "$bootstrap_machine_id"
         )
         if [ "$bootstrap_home_mode" = nfs ]; then

@@ -18,7 +18,7 @@
 
 1. **Given**対応するLinux環境と利用者の権限がある
    **When**`pixied install`を実行する
-   **Then**専用Pixi binary、direnv、選択したsession manager、runtime hook、launcher、stateが準備される。
+   **Then**専用Pixi binary、direnv、runtime hook、launcher、stateが準備される。
 2. **Given**利用者が既存のPixi環境を持っている
    **When**PixiEdenをインストールする
    **Then**既存のPixi binary、`PIXI_HOME`、Pixi Global環境は参照または上書きされない。
@@ -56,7 +56,7 @@
 
 ### User Story
 
-開発者として、Bashを起動した時点で専用のhomeとtoolを使い、条件を満たす場合は開発セッションへ自動接続したい。
+開発者として、Bashを起動した時点で専用のhomeとtoolを使い、対話shellではプロジェクト用のdirenv hookも使いたい。
 
 **関連UC**: [UC-03](use-cases.ja.md#uc-03)
 
@@ -67,9 +67,9 @@
 1. **Given**有効なstateとruntime artifactがある
    **When**shell設定からhookを評価する
    **Then**専用の`HOME`、`PIXI_HOME`、`PATH`がshellへ設定される。
-2. **Given**shellが対話TTY上にあり、CI環境ではなく、既にZellij内でもない
-   **When**session managerが`zellij`でhookを評価する
-   **Then**UC-05が自動起動される。
+2. **Given**shellが対話TTY上にある
+   **When**hookを評価する
+   **Then**専用runtimeのdirenv hookが対象shellに設定される。
 3. **Given**stateまたはruntime artifactを検証できない
    **When**hookを評価する
    **Then**親shellの環境を変更せず、installが必要であることを示して終了する。
@@ -90,7 +90,7 @@
 
 1. **Given**PixiEdenがインストール済みである
    **When**`pixied run <command>`を実行する
-   **Then**Zellijへattachせず、専用runtimeでcommandを一度だけ実行する。
+   **Then**専用runtimeでcommandを一度だけ実行する。
 2. **Given**呼び出し元にTTYがない
    **When**`pixied run <command>`を実行する
    **Then**commandを実行できる。
@@ -100,11 +100,11 @@
 
 ## US-105
 
-### 開発セッションを開始または再開する
+### 対話shellを開始する
 
 ### User Story
 
-開発者として、`pixied shell`で専用の対話環境を開始し、同じmachine上でZellijを選択した場合は残っている作業セッションへ再接続したい。
+開発者として、`pixied shell`で専用runtimeの対話Bashを開始したい。
 
 **関連UC**: [UC-05](use-cases.ja.md#uc-05)
 
@@ -112,15 +112,9 @@
 
 ### Acceptance Criteria
 
-1. **Given**利用者が対話TTY上にいて、session managerが`none`である
+1. **Given**利用者が対話TTY上にいる
    **When**`pixied shell`を実行する
    **Then**専用runtimeの対話Bashが起動する。
-2. **Given**session managerが`zellij`で既存セッションがある
-   **When**`pixied shell`を実行する
-   **Then**既存の`pixied`sessionへ接続する。
-3. **Given**session managerが`zellij`で既存セッションがない
-   **When**`pixied shell`を実行する
-   **Then**初回セッションを作成して接続する。
 
 ## US-106
 
@@ -239,17 +233,11 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
    **When**その中から管理操作を実行する
    **Then**アクティブruntimeとして検出せず、state fileをsource of truthとは扱わない。
 3. **Given**アクティブruntime shellがある
-   **When**`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`のいずれかを指定する
+   **When**`--home-mode`、`--local-home`、`--machine-id`、`--pixi-home`のいずれかを指定する
    **Then**`active runtime rejects identity-changing option: --<option> '<指定値>' (verified state uses '<検証済み値>')`を出力して却下する。
-4. **Given**既存stateがあるアクティブruntime shellがある
-   **When**reinstallでsession managerを変更しようとする
-   **Then**`cannot change session manager during reinstall; run uninstall first`を出力して却下する。
-5. **Given**`zellij`のアクティブruntime shellがある
-   **When**`pixied uninstall`を実行する
-   **Then**`cannot uninstall from an attached Zellij runtime session; detach the managed Zellij session (exit the session) and rerun the uninstall`を出力して却下する。
-6. **Given**アクティブruntime shellでinstall/uninstallを実行した
-   **When**stateが更新されたあと`exit`でruntime shellを抜け、runtimeを再起動または再attachする
-   **Then**現在のsessionが保持していた環境は変えず、再評価したruntimeにのみ新しい設定が反映される。
+4. **Given**アクティブruntime shellでinstall/uninstallを実行した
+   **When**stateが更新されたあと`exit`でruntime shellを抜け、新しいshellを開始する
+   **Then**現在のruntime shellが保持していた環境は変えず、新しいshellを開始したruntimeにのみ新しい設定が反映される。
 
 ## US-110
 

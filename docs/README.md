@@ -61,7 +61,7 @@ For an existing state, reinstall identity and active-runtime constraints are che
 
 NFS distribution and host runtime are separate. A public Release install verifies an archive, publishes an immutable version under the shared state root, atomically selects `current`, and deploys the same verified source to the initiating machine's local payload. The stable account-side dispatcher uses the selected Release for management commands such as `install`, `version`, `prune`, and `uninstall`.
 
-Runtime commands use the current machine's local payload, Pixi home, cache, and session resources. They never source the shared Release tree. This lets a host continue running its verified local payload while another host publishes a newer `current` Release.
+Runtime commands use the current machine's local payload, Pixi home, cache, and runtime resources. They never source the shared Release tree. This lets a host continue running its verified local payload while another host publishes a newer `current` Release.
 
 On another host, `pixied install` resolves and validates the shared `current` Release and deploys it locally without downloading an archive. `pixied version` reports both the shared Release and local payload. A mismatch, legacy state without release metadata, or an uninstalled host is informational; runtime commands continue with the local payload and do not update it automatically.
 
@@ -69,7 +69,7 @@ On another host, `pixied install` resolves and validates the shared `current` Re
 
 ## Environment variables
 
-Supported user-facing install settings are `PIXIED_HOME_MODE`, `PIXIED_LOCAL_HOME`, and `PIXIED_SESSION_MANAGER`. `PIXIED_AUTO_ATTACH` controls runtime shell attachment. `PIXIED_MACHINE_ID` identifies machine state. Release configuration uses `PIXIED_RELEASE_URL`.
+Supported user-facing install settings are `PIXIED_HOME_MODE` and `PIXIED_LOCAL_HOME`. `PIXIED_MACHINE_ID` identifies machine state. Release configuration uses `PIXIED_RELEASE_URL`.
 
 Resolved paths such as `PIXIED_DATA_DIR`, `PIXIED_CONFIG_DIR`, and `PIXIED_STATE_DIR` are outputs, not user configuration inputs. Test and development injection variables are not part of the public compatibility contract.
 
@@ -79,12 +79,12 @@ Resolved paths such as `PIXIED_DATA_DIR`, `PIXIED_CONFIG_DIR`, and `PIXIED_STATE
 | --- | --- |
 | `bin/pixied` | CLI dispatch and install, runtime, and uninstall ordering |
 | `lib/paths.sh` | Home, local-home, XDG, machine-ID, and dedicated Pixi path resolution and validation |
-| `lib/options.sh` | CLI, environment, state, auto-detection, defaults, wizard, and preflight |
+| `lib/options.sh` | CLI, environment, state, defaults, wizard, and preflight |
 | `lib/state.sh` | State parsing, validation, locking, and atomic writes |
-| `lib/pixi.sh` | Dedicated Pixi download, checksum validation, and provisioning |
+| `lib/pixi.sh` | Dedicated Pixi download, checksum validation, and direnv provisioning |
 | `lib/hook.sh` | Runtime hook generation and shell initialization output |
 | `lib/sync.sh` | NFS shell-file allowlist and account-to-local reconciliation |
-| `lib/session.sh` | Child commands and session management |
+| `lib/session.sh` | Child commands and interactive Bash startup |
 | `lib/uninstall.sh` | Ownership validation, quarantine, and cleanup |
 | `lib/generate.sh` | Project integration file generation |
 

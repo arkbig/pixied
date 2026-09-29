@@ -2,7 +2,7 @@
 # @brief Run PixiEden release-level checks in a disposable Multipass VM.
 # @description
 # Uses the Windows Multipass client explicitly when running from WSL. The
-# guest verifies the real Pixi, direct Zellij attach, and PTY behavior without
+# guest verifies real Pixi, real direnv, direct Bash, and PTY behavior without
 # modifying the WSL host.
 
 set -Eeuo pipefail
@@ -39,7 +39,7 @@ usage() {
     cat <<'USAGE'
 Usage: tests/e2e/run-multipass.sh [OPTIONS]
 
-Run the real local/zellij PixiEden E2E in a disposable Ubuntu VM.
+Run the real PixiEden E2E in a disposable Ubuntu VM.
 
 Options:
   --keep-vm     Keep the VM after success or failure for investigation.
@@ -153,7 +153,7 @@ cleanup() {
     exit "$exit_code"
 }
 
-# @description Build the release archive and run the direct-attach guest check.
+# @description Build the release archive and run the direct-runtime guest check.
 # @exitcode 0 When all guest checks succeed.
 # @exitcode 1 When the VM or guest check fails.
 main() {
@@ -180,7 +180,7 @@ main() {
     run_multipass transfer "$guest_runner" \
         "$CURRENT_VM:/home/ubuntu/pixied-guest.sh"
 
-    printf '[E2E] installing real Pixi and attaching directly to Zellij\n'
+    printf '[E2E] installing real Pixi and verifying direct runtime behavior\n'
     run_multipass exec "$CURRENT_VM" -- sudo env \
         PIXIED_E2E_PHASE=install bash /home/ubuntu/pixied-guest.sh
 

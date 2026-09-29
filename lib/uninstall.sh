@@ -39,9 +39,8 @@ Remove the PixiEden installation.
 
 Options:
     --yes     Skip the final confirmation prompt.
-    --force   Downgrade active-runtime lease and Zellij session checks to
-              warnings. The final confirmation is still required unless
-              --yes is also given.
+    --force   Downgrade active-runtime lease checks to warnings. The final
+              confirmation is still required unless --yes is also given.
 USAGE
 }
 
@@ -51,8 +50,8 @@ USAGE
 #
 # @arg $@ string Uninstall arguments.
 # @set PIXIED_INSTALL_ASSUME_YES integer Whether confirmation is skipped.
-# @set PIXIED_UNINSTALL_FORCE integer Whether active-lease and Zellij session
-# checks are downgraded to warnings.
+# @set PIXIED_UNINSTALL_FORCE integer Whether active-lease checks are downgraded
+# to warnings.
 # @exitcode 0 When arguments are valid.
 # @exitcode 2 When an argument is unknown or malformed.
 pixied_uninstall_parse() {
@@ -320,11 +319,6 @@ pixied_uninstall_validate_current_state() {
         pixied_uninstall_require_path_match direnv_path \
             "${PIXIED_STATE[direnv_path]}" "$expected"
     fi
-    if pixied_state_has zellij_path; then
-        expected="${PIXIED_STATE[pixi_home]}/bin/zellij"
-        pixied_uninstall_require_path_match zellij_path \
-            "${PIXIED_STATE[zellij_path]}" "$expected"
-    fi
     # The pixi home that was recorded in the state is the source of truth,
     # covering local, nfs, and an explicit --pixi-home uniformly. Recomputing it
     # from home_mode would reject a custom pixi home during uninstall.
@@ -355,9 +349,6 @@ pixied_uninstall_validate_current_state() {
     fi
     if pixied_state_has direnv_path && pixied_state_has direnv_hash; then
         checks+=("${PIXIED_STATE[direnv_path]}|file|${PIXIED_STATE[direnv_hash]}")
-    fi
-    if pixied_state_has zellij_path && pixied_state_has zellij_hash; then
-        checks+=("${PIXIED_STATE[zellij_path]}|file|${PIXIED_STATE[zellij_hash]}")
     fi
     if pixied_state_has runtime_hook_path && pixied_state_has runtime_hook_hash; then
         checks+=("${PIXIED_STATE[runtime_hook_path]}|file|${PIXIED_STATE[runtime_hook_hash]}")
@@ -601,10 +592,6 @@ pixied_uninstall_prepare_targets() {
         if pixied_state_has direnv_path && pixied_state_has direnv_hash; then
             pixied_uninstall_add_target "${PIXIED_STATE[direnv_path]}" \
                 "${PIXIED_STATE[direnv_hash]}" file
-        fi
-        if pixied_state_has zellij_path && pixied_state_has zellij_hash; then
-            pixied_uninstall_add_target "${PIXIED_STATE[zellij_path]}" \
-                "${PIXIED_STATE[zellij_hash]}" file
         fi
     fi
     if [ "$PIXIED_UNINSTALL_SHARED_CONFIG" -eq 0 ] || [ "$PIXIED_UNINSTALL_SHARED_COMMAND" -eq 0 ]; then
@@ -860,64 +847,6 @@ pixied_uninstall_confirm() {
         return 1
         ;;
     esac
-}
-
-# @description Refuse to remove resources while the managed Zellij session exists.
-# Direct attach leaves the session resident. If the session list is unavailable,
-# warn and continue because the user explicitly requested the uninstall. If the
-# state cannot identify the dedicated Zellij command, a regular uninstall gives
-# manual recovery instructions and --force continues with an explicit warning.
-# @exitcode 0 When no managed session is present, inspection fails, or --force.
-# @exitcode 1 When the session is active or cannot be inspected without --force.
-pixied_uninstall_require_no_active_session() {
-    local session_name sessions line message issue=""
-    [ "${PIXIED_STATE[session_manager]}" = zellij ] || return 0
-    session_name=pixied
-    if ! pixied_state_has zellij_path; then
-        issue="uninstall state is missing Zellij path"
-    elif ! pixied_state_has zellij_hash; then
-        issue="uninstall state is missing Zellij hash"
-    fi
-    if [ -n "$issue" ]; then
-        if [ "${PIXIED_UNINSTALL_FORCE:-0}" = 1 ]; then
-            message="uninstalling with --force without checking the managed Zellij session: $issue"
-            message+=$'\nIf the session is still active, end it manually with: zellij delete-session '
-            message+="$session_name"
-            pixied_warn "$message"
-            return 0
-        fi
-        message="cannot verify whether the managed Zellij session is active: $issue"
-        message+=$'\nTo uninstall:'
-        message+=$'\n  1. Check the session manually: zellij list-sessions --no-formatting'
-        message+=$'\n  2. End it if present: zellij delete-session '
-        message+="$session_name"
-        message+=$'\n  3. Rerun: pixied uninstall --force'
-        message+=$'\n--force skips the Zellij session check, but all other managed paths are still validated.'
-        pixied_die "$message"
-    fi
-    pixied_validate_owned_path "${PIXIED_STATE[zellij_path]}" "${PIXIED_STATE[zellij_hash]}"
-    if ! sessions=$(pixied_run "${PIXIED_STATE[zellij_path]}" list-sessions --no-formatting 2>/dev/null); then
-        pixied_warn "could not inspect the managed Zellij session before uninstall; continuing"
-        return 0
-    fi
-    while IFS= read -r line; do
-        case "$line" in
-        "$session_name" | "$session_name "*)
-            if [ "${PIXIED_UNINSTALL_FORCE:-0}" = 1 ]; then
-                pixied_warn "uninstalling with --force while the managed Zellij session 'pixied' is still active; the session keeps using files that were just removed, so end it with: zellij delete-session pixied"
-                return 0
-            fi
-            message="cannot uninstall while the managed Zellij session is active: $session_name"
-            message+=$'\nTo uninstall:'
-            message+=$'\n  1. Verify the session: '
-            message+="${PIXIED_STATE[zellij_path]} list-sessions --no-formatting"
-            message+=$'\n  2. End the session: '
-            message+="${PIXIED_STATE[zellij_path]} delete-session $session_name"
-            message+=$'\n  3. Rerun: pixied uninstall'
-            pixied_die "$message"
-            ;;
-        esac
-    done <<<"$sessions"
 }
 
 # @description Refuse to uninstall while another runtime holds a live lease.
@@ -1221,19 +1150,18 @@ pixied_launcher_generate() {
 # @exitcode 2 When arguments are invalid.
 # The order is deliberate: restore pending state before loading it, validate
 # all ownership before confirmation, keep stale quarantine cleanup after
-# confirmation, stop session infrastructure before quarantine, and quarantine
-# the state file last so an interruption leaves a recovery checkpoint.
+# confirmation, and quarantine the state file last so an interruption leaves a
+# recovery checkpoint.
 #
 # The runtime no longer holds the state lock, so uninstall always acquires a
 # fresh short lock. After loading state, stale leases are swept and any live
 # foreign lease blocks the uninstall unless --force is given; a lease held by
 # this process's own ancestor chain (uninstalling from inside a runtime) is
-# excluded. The resident Zellij session check is likewise downgraded by --force.
+# excluded.
 #
 # An active runtime bootstraps the verified state file as the identity source
 # of truth, so identity is never re-derived from the (possibly remapped) $HOME.
-# A missing or invalid active state is fatal before any removal. An active
-# Zellij runtime is rejected because the managed session is still attached.
+# A missing or invalid active state is fatal before any removal.
 pixied_uninstall_run() {
     pixied_uninstall_parse "$@"
     pixied_state_bootstrap_active_runtime
@@ -1248,11 +1176,6 @@ pixied_uninstall_run() {
         pixied_die "PixiEden state is unavailable; refusing to guess what to remove"
     pixied_state_load "$PIXIED_STATE_FILE"
     pixied_uninstall_snapshot_state
-    if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ] &&
-        [ "${PIXIED_STATE[session_manager]:-}" = zellij ] &&
-        [ -n "${ZELLIJ:-}" ]; then
-        pixied_die "cannot uninstall from an attached Zellij runtime session; detach the managed Zellij session (exit the session) and rerun the uninstall"
-    fi
     pixied_lease_sweep
     pixied_uninstall_require_no_active_lease
     pixied_uninstall_validate_current_state
@@ -1262,7 +1185,6 @@ pixied_uninstall_run() {
     pixied_uninstall_prepare_shared_release_cleanup
     pixied_uninstall_confirm || pixied_die "uninstall was not confirmed"
     pixied_uninstall_purge_stale_quarantines
-    pixied_uninstall_require_no_active_session
     pixied_step "Removing the PixiEden installation for $PIXIED_MACHINE_ID"
     pixied_uninstall_quarantine_targets
     pixied_uninstall_cleanup_shared_release_store

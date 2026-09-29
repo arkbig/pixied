@@ -550,23 +550,18 @@ pixied_pixi_global_install() {
         pixied_die "Pixi Global package was not exposed at $package_path"
     case "$package" in
     direnv) export PIXIED_DIRENV_PATH=$package_path ;;
-    zellij) export PIXIED_ZELLIJ_PATH=$package_path ;;
     esac
 }
 
 # @description Install the Phase 2 Pixi Global packages.
-# direnv is always installed; zellij is installed only for the zellij session mode.
+# direnv is installed for the generated runtime hook.
 #
 # @set PIXIED_DIRENV_PATH string The dedicated direnv path.
-# @set PIXIED_ZELLIJ_PATH string The dedicated zellij path when enabled.
 # @exitcode 0 When the dedicated environment is ready.
 # @exitcode 1 When provisioning fails.
 pixied_pixi_provision_globals() {
     pixied_pixi_run --version >/dev/null
     pixied_pixi_global_install direnv
-    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
-        pixied_pixi_global_install zellij
-    fi
 }
 
 # @description Install the dedicated Pixi binary and Phase 2 Global packages.

@@ -13,40 +13,19 @@ global)
     shift 2
     mkdir -p "${PIXI_HOME:?}/bin"
     for package in "$@"; do
-        if [ "$package" = zellij ]; then
+        if [ "$package" = direnv ] && [ -n "${PIXIED_FAKE_DIRENV_LOG:-}" ]; then
             cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-umask 022
-case "${1:-}" in
-attach)
-    if [ -n "${PIXIED_FAKE_ZELLIJ_TOUCH:-}" ]; then
-        printf '%s\n' "${PIXIED_FAKE_ZELLIJ_CONTENT:-fake-session-change}" >"$PIXIED_FAKE_ZELLIJ_TOUCH"
-    fi
-    ;;
-list-sessions)
-    [ "${PIXIED_FAKE_ZELLIJ_LIST_FAIL:-0}" -eq 0 ] || exit 1
-    if [ "${PIXIED_FAKE_ZELLIJ_REMAINS:-0}" -eq 1 ]; then
-        printf '%s [Created]\n' "${PIXIED_FAKE_ZELLIJ_SESSION_NAME:-pixied-fake}"
-    fi
-    ;;
-esac
-SCRIPT
-        else
-            if [ "$package" = direnv ] && [ -n "${PIXIED_FAKE_DIRENV_LOG:-}" ]; then
-                cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
 #!/usr/bin/env bash
 printf '%s %s\n' "${1:-}" "${2:-}" >>"${PIXIED_FAKE_DIRENV_LOG:?}"
 if [ "${1:-}" = hook ]; then
     printf ':\n'
 fi
 SCRIPT
-            else
-                cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
+        else
+            cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
 #!/usr/bin/env bash
 exit 0
 SCRIPT
-            fi
         fi
         chmod 0755 "$PIXI_HOME/bin/$package"
     done

@@ -46,7 +46,7 @@ flowchart LR
 | UC-02 | Bash/zsh起動時のhookを設定する | 利用者 | `pixied hook bash`または`pixied hook zsh`の出力をshell設定へ追加する | [US-102](user-stories.ja.md#us-102) |
 | UC-03 | 起動時に専用環境を有効化する | Bash/zshシェル | shell起動時にhookを評価する | [US-103](user-stories.ja.md#us-103) |
 | UC-04 | 専用環境でcommandを実行する | 利用者 | `pixied run <command>` | [US-104](user-stories.ja.md#us-104) |
-| UC-05 | 開発セッションを開始または再開する | 利用者 | `pixied shell` | [US-105](user-stories.ja.md#us-105) |
+| UC-05 | 対話shellを開始する | 利用者 | `pixied shell` | [US-105](user-stories.ja.md#us-105) |
 | UC-06 | NFSホームで開発する | 利用者 | `pixied install --home-mode nfs` | [US-106](user-stories.ja.md#us-106) |
 | UC-07 | PixiEden環境を整理する | 利用者 | `pixied uninstall` | [US-107](user-stories.ja.md#us-107) |
 | UC-08 | プロジェクトPixi環境を生成する | 利用者 | `pixied generate <devcontainer\|dockerfile\|direnv>` | [US-108](user-stories.ja.md#us-108) |
@@ -58,7 +58,7 @@ flowchart LR
 
 環境をインストールする。
 
-1. 利用者がhome mode、local home、session managerなどを指定してinstallを実行する。
+1. 利用者がhome modeとlocal homeを指定してinstallを実行する。
 2. PixiEdenが専用Pixi環境、runtime hook、launcher、stateを準備する。
 3. 利用者がBashまたはzsh hookを設定すると、以後のshell起動からUC-03を利用できる。
 
@@ -77,7 +77,7 @@ Bash/zsh起動時のhookを設定する。
 1. Bashシェルが設定されたhookを評価する。
 2. PixiEdenがstateとruntime artifactを検証する。
 3. 専用の`HOME`、`PIXI_HOME`、`PATH`をshellへ設定する。
-4. 条件を満たす対話TTYではUC-05を自動起動する。
+4. 対話shellでは専用direnv hookを評価する。
 
 ### UC-04
 
@@ -89,11 +89,10 @@ Bash/zsh起動時のhookを設定する。
 
 ### UC-05
 
-開発セッションを開始または再開する。
+対話shellを開始する。
 
 1. 利用者が対話TTY上で`pixied shell`を実行する。
-2. `none`では専用の対話Bashを起動し、`zellij`では既存セッションへ接続する。
-3. 既存セッションがなければ初回セッションを作成する。
+2. PixiEdenが専用runtimeを準備し、その中で対話Bashを起動する。
 
 ### UC-06
 
@@ -128,8 +127,8 @@ NFSホームで開発する。
 
 1. 利用者が専用環境を有効化したruntime shellから`pixied install`を実行する。
 2. PixiEdenが`PIXIED_RUNTIME_HOOK_ACTIVE=1`と`PIXIED_RUNTIME_STATE_FILE`の両方を検証し、アクティブruntimeと判定する。
-3. PixiEdenが検証済みstate fileをidentityのsource of truthとして読み込み、指定されたidentity変更option（`--home-mode`、`--local-home`、`--machine-id`、`--session-manager`、`--pixi-home`）を却下する。reinstallでsession managerを変更しようとした場合も却下する。
-4. それ以外のオプションで設定を更新し、stateを書き込む。現在のsessionが保持する環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。
+3. PixiEdenが検証済みstate fileをidentityのsource of truthとして読み込み、指定されたidentity変更option（`--home-mode`、`--local-home`、`--machine-id`、`--pixi-home`）を却下する。
+4. それ以外のオプションで設定を更新し、stateを書き込む。現在のruntime shellが保持する環境は変えず、`exit`後に新しいshellを開始したruntimeにのみ反映する。
 
 ### UC-10
 
@@ -137,8 +136,7 @@ NFSホームで開発する。
 
 1. 利用者が専用環境を有効化したruntime shellから`pixied uninstall`を実行する。
 2. PixiEdenがアクティブruntimeかつ検証済みstate fileをsource of truthとしてidentityを解決する（`$HOME`からは再計算しない）。
-3. `zellij`のアクティブruntimeの場合、専用sessionのdetachを求めて却下する。
-4. `none`のアクティブruntimeの場合、所有資源を整理してstateを更新する。現在のsessionが保持する環境は変えず、`exit`後再起動または再attachしたruntimeにのみ反映する。
+3. PixiEdenが所有資源を整理してstateを更新する。現在のruntime shellが保持する環境は変えず、`exit`後に新しいshellを開始したruntimeにのみ反映する。
 
 ### UC-11
 

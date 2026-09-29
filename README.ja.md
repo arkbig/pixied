@@ -7,7 +7,7 @@
 PixiEdenは[Pixi](https://github.com/prefix-dev/pixi/)ベースの開発環境構築ツールです。コマンド名は`pixied`。
 
 PixiEdenは、WSL2などのローカル環境から、ホームディレクトリがNFS共有されている非特権(root権限なし)サーバーまで、同じ定義からPixi開発runtimeを再構築できます。
-Pixi、direnv、Zellijを組み合わせ、I/O負荷の高いネットワークホームを避けてデータをマシンローカルストレージへ逃がします。
+Pixiとdirenvを組み合わせ、I/O負荷の高いネットワークホームを避けてデータをマシンローカルストレージへ逃がします。
 
 対象は次の2つです。
 
@@ -18,12 +18,11 @@ Pixi、direnv、Zellijを組み合わせ、I/O負荷の高いネットワーク�
 
 - ノートPC、WSL、リモートLinuxで同じ設定から環境を再構築したい
 - `$HOME`がNFSで、開発ツールの動作が遅い・壊れやすい
-- 同じmachineで再接続や再起動後も残ったZellij sessionへ戻りたい
 
 ## 主要機能
 
 - グローバルの開発runtimeを構築
-  + 同じmachineに残ったZellij sessionへ再接続
+  + 専用runtimeで対話Bashを開始
 - プロジェクトごとのPixi環境を構築
   + グローバルPixi環境の上にプロジェクトPixi環境を重ねて利用可能
   + DevContainerまたはDocker用の定義を生成可能
@@ -50,7 +49,7 @@ if [ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/pixied" ]; then
 fi
 ```
 
-新しいターミナルやSSHセッションを開くと専用runtimeが有効になる。Zellijを有効にした場合は専用の`pixied`sessionへattachまたは作成する。
+新しいターミナルやSSHセッションを開くと専用runtimeが有効になる。`pixied shell`を実行すると、そのruntimeで対話Bashを開始する。
 
 NFS共有ホームで使う場合は、マシンローカルなディレクトリを使う。未作成の選択パスなら表示し利用者が確認した後、PixiEdenが作成します。`--yes`、または`curl | bash`のようにstdin/stdoutがTTYでないインストールでは確認も作成も行わないため、事前に作成しておく必要があります。
 
@@ -95,7 +94,7 @@ NFS hostを一台uninstallすると、そのhostのlocal payloadとmachine state
 
 ```text
 pixied                       shellへのエイリアス
-pixied shell                 セッションへ接続
+pixied shell                 対話Bashを開始
 pixied run <command...>      専用環境でcommandを実行
 pixied hook <bash|zsh>       シェル初期化コードを出力
 pixied install               環境をインストールまたは修復

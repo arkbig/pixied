@@ -57,7 +57,7 @@ Usage: pixied [COMMAND]
 
 Commands:
     (no command)           Alias for shell.
-    shell [options]        Attach to the PixiEden session.
+    shell                  Start an interactive Bash shell in the PixiEden runtime.
     run <command>          Run a command in the PixiEden runtime.
     install [options]      Install the dedicated Pixi environment and verify state.
     hook <shell> [options] Print shell initialization code.
@@ -356,32 +356,23 @@ pixied_version() {
 # @stdout The shell command help message
 pixied_shell_usage() {
     cat <<'USAGE'
-Usage: pixied shell [--auto-attach auto|none]
+Usage: pixied shell
 
-Attach to the PixiEden session.
+Start an interactive Bash shell in the PixiEden runtime.
 
 Runtime activation uses the dedicated Pixi environment and starts an isolated
 child process.
-
-Options:
-    --auto-attach auto|none   (or PIXIED_AUTO_ATTACH=auto|none) controls whether the
-                              interactive shell auto-attaches to Zellij. Use 'none' to
-                              skip auto-attach and join manually with:
-                              zellij attach --create pixied (default: auto)
 USAGE
 }
 
-# @description Attach to the PixiEden session.
+# @description Start an interactive Bash shell in the PixiEden runtime.
 # Loads and validates the current machine state before starting an interactive
-# child shell or attaching to the direct Zellij session. The --auto-attach flag
-# or PIXIED_AUTO_ATTACH environment variable overrides the Zellij auto-attach.
 # When --help is passed, prints the shell subcommand usage instead.
 #
 # @arg $@ string Runtime options.
-# @exitcode 0 When the child shell or attach process exits successfully, or
-# when the shell usage is printed.
-# @exitcode The child or attach process exit status, including 128 plus the
-# signal number when the process was terminated by a signal.
+# @exitcode 0 When the child shell exits successfully or usage is printed.
+# @exitcode The child shell exit status, including 128 plus the signal number
+# when the process was terminated by a signal.
 # @see pixied_shell_usage
 pixied_shell() {
     pixied_options_parse_runtime "$@"
@@ -390,13 +381,13 @@ pixied_shell() {
         return "$PIXIED_EXIT_OK"
     fi
     if [ "${#PIXIED_RUNTIME_POSITIONAL[@]}" -gt 0 ]; then
-        pixied_die "usage: pixied shell [--auto-attach auto|none]" "$PIXIED_EXIT_USAGE"
+        pixied_die "usage: pixied shell" "$PIXIED_EXIT_USAGE"
     fi
     pixied_runtime_shell
 }
 
 # @description Run a command in the PixiEden runtime.
-# Explicit commands run directly without Zellij and without requiring a TTY.
+# Explicit commands run directly without requiring a TTY.
 #
 # @arg $@ string The command and arguments to execute.
 # @exitcode 0 When the command exits successfully.
@@ -411,74 +402,39 @@ pixied_run_command() {
 # @stdout The hook command help message
 pixied_hook_usage() {
     cat <<'USAGE'
-Usage: pixied hook <bash|zsh> [--auto-attach auto|none]
+Usage: pixied hook <bash|zsh>
 
 Print shell initialization code for the PixiEden runtime.
 
 Arguments:
     <shell>   The target shell: bash or zsh.
 
-Options:
-    --auto-attach auto|none   (or PIXIED_AUTO_ATTACH=auto|none) controls whether the
-                              interactive hook auto-attaches to Zellij. When passed, the
-                              resolved setting is baked into the generated runtime hook.
-                              (default: auto)
 USAGE
 }
 
 # @description Handle the hook that prints shell initialization code.
 # Bash and zsh are supported. The runtime state and generated hook are
-# validated before source code is emitted. When --auto-attach is passed, the
-# runtime hook is regenerated so the resolved mode is baked into the sourced
-# file and persisted with the updated hook hash. The regeneration holds the
-# short state lock from pixied_state_lock_path across the hook write and the
-# state write, then releases it. When the state write fails, the previous hook
-# file is restored so no hash mismatch remains. When --help is passed, prints
-# the hook subcommand usage instead.
+# validated before source code is emitted. When --help is passed, prints the
+# hook subcommand usage instead.
 #
 # @arg $@ string The shell name and runtime options
 # @exitcode 2 When the usage is invalid
 # @exitcode 1 When the installation or generated hook is invalid
 # @see pixied_hook_usage
-# @see pixied_state_lock_path
-# @see pixied_state_lock_acquire
-# @see pixied_state_lock_release
 pixied_hook() {
-    local runtime_path hook_backup
     pixied_options_parse_runtime "$@"
     if [ "${PIXIED_OPTIONS_HELP:-0}" -eq 1 ]; then
         pixied_hook_usage
         return "$PIXIED_EXIT_OK"
     fi
     if [ "${#PIXIED_RUNTIME_POSITIONAL[@]}" -ne 1 ]; then
-        pixied_die "usage: pixied hook <bash|zsh> [--auto-attach auto|none]" "$PIXIED_EXIT_USAGE"
+        pixied_die "usage: pixied hook <bash|zsh>" "$PIXIED_EXIT_USAGE"
     fi
     case "${PIXIED_RUNTIME_POSITIONAL[0]}" in
     bash | zsh) ;;
-    *) pixied_die "usage: pixied hook <bash|zsh> [--auto-attach auto|none]" "$PIXIED_EXIT_USAGE" ;;
+    *) pixied_die "usage: pixied hook <bash|zsh>" "$PIXIED_EXIT_USAGE" ;;
     esac
     pixied_runtime_load_state
-    if [ "${PIXIED_OPTION_CLI_SET[auto_attach]:-0}" -eq 1 ]; then
-        runtime_path=$(pixied_hook_runtime_path)
-        hook_backup=""
-        pixied_state_lock_acquire "$(pixied_state_lock_path)"
-        if [ -f "$runtime_path" ] && [ ! -L "$runtime_path" ]; then
-            hook_backup=$(pixied_run mktemp --tmpdir="${runtime_path%/*}" .pixied-hook-backup.XXXXXX)
-            pixied_register_temp "$hook_backup"
-            pixied_run cp -p -- "$runtime_path" "$hook_backup"
-        fi
-        pixied_hook_generate_runtime
-        if ! (pixied_state_write "$PIXIED_STATE_FILE" >/dev/null 2>&1); then
-            if [ -n "$hook_backup" ]; then
-                pixied_run cp -p -- "$hook_backup" "$runtime_path" >/dev/null 2>&1
-            else
-                pixied_run rm -f -- "$runtime_path" >/dev/null 2>&1
-            fi
-            pixied_state_lock_release
-            pixied_die "could not persist runtime hook state"
-        fi
-        pixied_state_lock_release
-    fi
     pixied_hook_emit
 }
 
@@ -527,10 +483,9 @@ Options:
     --yes                          Skip interactive confirmation prompts.
     --home-mode local|nfs          Select the account home mode.
     --local-home PATH              Set the machine-local home used by NFS mode.
-    --session-manager none|zellij  Select the runtime session manager.
     --machine-id ID                Set the machine-specific state identifier.
 
-Changing home mode, local home, session manager, or machine ID during
+Changing home mode, local home, or machine ID during
 reinstall is rejected; run uninstall first.
 USAGE
 }
@@ -574,7 +529,6 @@ pixied_install() {
     # Reject identity-changing options before any path resolution or state load.
     pixied_install_assert_active_identity
 
-    pixied_options_apply_defaults
     pixied_resolve_paths 0
     pixied_require_cmd bash
     pixied_run bash --version >/dev/null
@@ -651,7 +605,6 @@ pixied_install() {
     pixied_state_set account_home "$PIXIED_ACCOUNT_HOME"
     pixied_state_set home_mode "$PIXIED_HOME_MODE"
     pixied_state_set local_home "$PIXIED_LOCAL_HOME"
-    pixied_state_set session_manager "$PIXIED_SESSION_MANAGER"
     pixied_state_set data_dir "$PIXIED_DATA_DIR"
     pixied_state_set config_dir "$PIXIED_CONFIG_DIR"
     pixied_state_set state_dir "$PIXIED_STATE_DIR"
@@ -670,11 +623,6 @@ pixied_install() {
     pixied_state_set pixi_binary_hash "$PIXIED_PIXI_BINARY_HASH"
     pixied_state_set direnv_path "$PIXIED_DIRENV_PATH"
     pixied_state_set direnv_hash "$(pixied_sha256_file "$PIXIED_DIRENV_PATH")"
-    unset 'PIXIED_STATE[zellij_path]' 'PIXIED_STATE[zellij_hash]'
-    if [ "$PIXIED_SESSION_MANAGER" = zellij ]; then
-        pixied_state_set zellij_path "$PIXIED_ZELLIJ_PATH"
-        pixied_state_set zellij_hash "$(pixied_sha256_file "$PIXIED_ZELLIJ_PATH")"
-    fi
     pixied_state_set created_data "$created_data"
     pixied_state_set created_pixi_home "$created_pixi_home"
     pixied_hook_generate_runtime
@@ -686,7 +634,7 @@ pixied_install() {
     else
         pixied_info "Created state: $PIXIED_STATE_FILE"
     fi
-    pixied_success "Runtime hook, dedicated Pixi environment, and session support are ready"
+    pixied_success "Runtime hook and dedicated Pixi environment are ready"
     if [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ]; then
         pixied_info "Active runtime installation kept the verified identity intact. The current session keeps the previous environment until you restart or re-attach the runtime."
     fi

@@ -8,7 +8,7 @@
 PixiEden is a [Pixi](https://github.com/prefix-dev/pixi/)-based development environment provisioning tool. Its command name is `pixied`.
 
 PixiEden can rebuild a Pixi development runtime from the same definition, from local environments such as WSL2 to unprivileged (without root privileges) servers whose home directories are shared over NFS.
-It combines Pixi, direnv, and Zellij, and offloads data to machine-local storage to avoid network homes with heavy I/O load.
+It combines Pixi and direnv, and offloads data to machine-local storage to avoid network homes with heavy I/O load.
 
 It targets the following two cases.
 
@@ -19,12 +19,11 @@ It targets the following two cases.
 
 - Rebuilding the same configuration on a laptop, WSL, and remote Linux
 - `$HOME` is on NFS, and development tools are slow or fragile
-- Returning to a Zellij session left on the same machine after reconnecting or restarting
 
 ## Key Features
 
 - Build a global development runtime
-  + Reconnect to a Zellij session left on the same machine
+  + Start an interactive Bash shell in the dedicated runtime
 - Build a per-project Pixi environment
   + Layer a project Pixi environment on top of the global Pixi environment
   + Generate definitions for DevContainer or Docker
@@ -51,7 +50,7 @@ if [ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/pixied" ]; then
 fi
 ```
 
-Opening a new terminal or SSH session enables the dedicated runtime. When Zellij is enabled, it attaches to or creates the dedicated `pixied` session.
+Opening a new terminal or SSH session enables the dedicated runtime. Run `pixied shell` to start an interactive Bash shell in it.
 
 When using it with an NFS-shared home, use a machine-local directory that you can create and own. In an interactive install, PixiEden reports a missing directory and can create the selected path only after you confirm it, before deployment. With `--yes`, or when standard input or output is not a TTY such as a `curl | bash` install, it never prompts or creates the directory, so create it in advance.
 
@@ -103,7 +102,7 @@ Uninstalling one NFS host removes its local payload and machine state while anot
 
 ```text
 pixied                       Alias to shell
-pixied shell                 Connect to the session
+pixied shell                 Start an interactive Bash shell
 pixied run <command...>      Run a command in the dedicated environment
 pixied hook <bash|zsh>       Print shell initialization code
 pixied install               Install or repair the environment

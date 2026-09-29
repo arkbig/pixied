@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# @brief Guest-side real PixiEden and direct Zellij verification.
+# @brief Guest-side real PixiEden and direct runtime verification.
 # @description
 # Runs as root inside a disposable Ubuntu VM. The PixiEden install itself runs
-# as an unprivileged user and starts its dedicated Zellij session directly.
+# as an unprivileged user and verifies its direct shell and job paths.
 
 set -Eeuo pipefail
 umask 022
@@ -19,7 +19,9 @@ readonly DATA_DIR="$REAL_HOME/.local/share/pixied"
 readonly STATE_DIR="$REAL_HOME/.local/state/pixied"
 readonly COMMAND_BIN="$DATA_DIR/bin"
 readonly STATE_FILE="$STATE_DIR/machines/$MACHINE_ID/state"
-readonly SESSION_NAME=pixied
+readonly PROJECT_DIR="$REAL_HOME/pixied-e2e-project"
+readonly JOB_LOG="$REAL_HOME/pixied-e2e-job.log"
+readonly JOB_PID_FILE="$REAL_HOME/pixied-e2e-job.pid"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -48,6 +50,14 @@ assert_file() {
     [ -f "$1" ] || fail "expected file: $1"
 }
 
+# @description Assert that a path does not exist.
+# @arg $1 string The path that must be absent.
+# @exitcode 0 When the path does not exist.
+# @exitcode 1 When the path exists.
+assert_absent() {
+    [ ! -e "$1" ] || fail "unexpected path: $1"
+}
+
 # @description Assert that a file contains a literal string.
 # @arg $1 string The file path.
 # @arg $2 string The expected text.
@@ -66,6 +76,7 @@ run_user() {
         cd "$REAL_HOME"
         exec runuser -u "$TEST_USER" -- env \
             HOME="$REAL_HOME" USER="$TEST_USER" LOGNAME="$TEST_USER" \
+            PIXIED_MACHINE_ID="$MACHINE_ID" \
             PATH="$COMMAND_BIN:$DATA_DIR/bin:$DATA_DIR/pixi/bin:/usr/local/bin:/usr/bin:/bin" \
             "$@"
     )
@@ -122,7 +133,7 @@ prepare_release() {
         fail "PixiEden release source is incomplete"
 }
 
-# @description Assert the generated state and direct-attach runtime artifacts.
+# @description Assert the generated state and direct runtime artifacts.
 # @exitcode 0 When the installation resources are verified.
 # @exitcode 1 When any resource is missing or incomplete.
 assert_installation() {
@@ -131,79 +142,132 @@ assert_installation() {
     assert_file "$COMMAND_BIN/pixied"
     assert_file "$COMMAND_BIN/pixi"
     assert_file "$DATA_DIR/pixi/bin/direnv"
-    assert_file "$DATA_DIR/pixi/bin/zellij"
     assert_file "$REAL_HOME/.config/pixied/runtime-hook.bash"
     assert_file "$REAL_HOME/.local/bin/pixied"
-    assert_contains "$STATE_FILE" "session_manager=zellij"
+    [ -d "$DATA_DIR/pixi/bin/trampoline_configuration" ] ||
+        fail "Pixi Global package configuration is missing"
+    [ -z "$(find "$DATA_DIR/pixi/bin" -mindepth 1 -maxdepth 1 \
+        ! -name direnv ! -name trampoline_configuration -print -quit)" ] ||
+        fail "unexpected Pixi global package artifact"
     if grep -Eq '^(systemd|linger|unit_)' "$STATE_FILE"; then
         fail "obsolete host-service state remains"
     fi
-    [ ! -e "$REAL_HOME/.config/systemd" ] || fail "systemd files were created"
+    assert_absent "$REAL_HOME/.config/systemd"
 }
 
-# @description Start and attach to the session through a real pseudo-terminal.
-# The timeout is expected because the attach remains interactive.
-# @exitcode 0 When timeout terminates the expected interactive attach.
-# @exitcode 1 When attach exits unexpectedly.
-attach_through_pty() {
-    local output=/tmp/pixied-e2e-attach.log exit_code
-    step "attaching to the session through a PTY"
+# @description Verify the real direnv hook in an interactive Bash on a PTY.
+# @exitcode 0 When the hook function is available.
+# @exitcode 1 When the hook cannot be evaluated.
+verify_direnv_hook_through_pty() {
+    local output=/tmp/pixied-e2e-direnv.log
+    step "evaluating the real direnv hook through a PTY"
+    if ! printf '%s\n' \
+        'eval "$(pixied hook bash)"' \
+        'if declare -F _direnv_hook >/dev/null; then printf "direnv-hook=ready\\n"; else exit 1; fi' \
+        'exit' |
+        run_user env -u PIXIED_RUNTIME_HOOK_ACTIVE TERM=xterm-256color \
+            timeout --foreground 20 script -qec 'bash --noprofile --norc -i' \
+            /dev/null >"$output" 2>&1; then
+        cat "$output" >&2
+        fail "real direnv hook did not load"
+    fi
+    assert_contains "$output" 'direnv-hook=ready'
+}
+
+# @description Start and exit the direct interactive Bash through a PTY.
+# @exitcode 0 When the shell accepts input and exits cleanly.
+# @exitcode 1 When the shell does not complete as expected.
+direct_shell_through_pty() {
+    local output=/tmp/pixied-e2e-shell.log
+    step "starting the direct interactive Bash through a PTY"
+    if ! printf '%s\n' \
+        'printf "shell-home=%s\\n" "$HOME"' \
+        'printf "shell-pixi=%s\\n" "$PIXI_HOME"' \
+        'exit' |
+        run_user env TERM=xterm-256color \
+            timeout --foreground 20 script -qec "$COMMAND_BIN/pixied shell" \
+            /dev/null >"$output" 2>&1; then
+        cat "$output" >&2
+        fail "direct interactive shell did not exit cleanly"
+    fi
+    assert_contains "$output" "shell-home=$REAL_HOME"
+    assert_contains "$output" "shell-pixi=$DATA_DIR/pixi"
+}
+
+# @description Create a small real Pixi project for the background-job check.
+# @exitcode 0 When the project manifest is ready.
+# @exitcode 1 When the manifest cannot be written.
+prepare_pixi_project() {
+    rm -rf -- "$PROJECT_DIR"
+    mkdir -p "$PROJECT_DIR"
+    cat >"$PROJECT_DIR/pixi.toml" <<'TOML'
+[workspace]
+name = "pixied-e2e"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+sighup-survival = "printf started; sleep 2; printf survived-after-sighup"
+TOML
+    chown -R "$TEST_USER:$TEST_USER" "$PROJECT_DIR"
+}
+
+# @description Start a nohup Pixi task and send SIGHUP to its launcher.
+# @exitcode 0 When the launcher is interrupted after starting the job.
+# @exitcode 1 When the launcher or job cannot be started.
+start_nohup_pixi_job() {
+    local exit_code
+    rm -f -- "$JOB_LOG" "$JOB_PID_FILE"
+    step "starting a nohup Pixi task and sending SIGHUP to its launcher"
     set +e
-    run_user env TERM=xterm-256color PIXIED_MACHINE_ID="$MACHINE_ID" \
-        timeout --signal=TERM --kill-after=5 15 \
-        script -qec "timeout --signal=TERM --kill-after=5 10 '$COMMAND_BIN/pixied' shell" \
-        /dev/null </dev/null >"$output" 2>&1
+    run_user env PIXI_HOME="$DATA_DIR/pixi" \
+        PIXI_CACHE_DIR="$DATA_DIR/pixi/cache" \
+        bash -c '
+            cd -- "$1"
+            nohup pixi run sighup-survival >"$2" 2>&1 &
+            printf "%s\n" "$!" >"$3"
+            kill -HUP "$$"
+        ' bash "$PROJECT_DIR" "$JOB_LOG" "$JOB_PID_FILE"
     exit_code=$?
     set -e
-    if [ "$exit_code" -ne 124 ]; then
-        cat "$output" >&2
-        fail "interactive attach exited unexpectedly: $exit_code"
-    fi
+    case "$exit_code" in
+    0 | 129) ;;
+    *) fail "SIGHUP launcher exited unexpectedly: $exit_code" ;;
+    esac
+    assert_file "$JOB_PID_FILE"
 }
 
-# @description Check whether the expected Zellij session exists.
-# @exitcode 0 When the session exists.
-# @exitcode 1 When the session does not exist or cannot be listed.
-# @see run_user
-session_exists() {
-    local sessions
-    sessions="$(run_user zellij list-sessions --no-formatting 2>/dev/null)" || return 1
-    grep -Eq "(^|[[:space:]])$SESSION_NAME([[:space:]]|$)" <<<"$sessions"
+# @description Verify that the nohup Pixi task completes after SIGHUP.
+# @exitcode 0 When the task writes its completion marker.
+# @exitcode 1 When the task exits early or times out.
+assert_nohup_pixi_job() {
+    job_completed() {
+        [ -f "$JOB_LOG" ] && grep -Fq -- 'survived-after-sighup' "$JOB_LOG"
+    }
+    wait_for "nohup Pixi task" job_completed
+    assert_contains "$JOB_LOG" 'started'
+    assert_contains "$JOB_LOG" 'survived-after-sighup'
 }
 
-# @description Check whether a Zellij process is running for the test user.
-# @exitcode 0 When a Zellij process exists.
-# @exitcode 1 When no Zellij process exists.
-zellij_process_exists() {
-    pgrep -u "$TEST_USER" -x zellij >/dev/null
-}
-
-# @description Verify that direct attach owns a live Zellij session.
-# @exitcode 0 When the session and process are active.
-# @exitcode 1 When either is missing.
-assert_session() {
-    wait_for "Zellij session" session_exists
-    wait_for "Zellij process" zellij_process_exists
-}
-
-# @description Install PixiEden and verify the first persistent session.
-# @exitcode 0 When install and first attach succeed.
+# @description Install PixiEden and verify direct runtime behavior.
+# @exitcode 0 When install and direct runtime checks succeed.
 # @exitcode 1 When the guest check fails.
 install_phase() {
     [ "$(id -u)" = 0 ] || fail "guest runner must run as root"
     step "installing guest dependencies"
-    apt_install bash ca-certificates curl procps tar util-linux
+    apt_install bash ca-certificates curl tar util-linux
     ensure_test_user
     prepare_release
-    step "installing PixiEden with real Pixi and Zellij"
-    run_user env PIXIED_HOME_MODE=local PIXIED_SESSION_MANAGER=zellij \
-        PIXIED_MACHINE_ID="$MACHINE_ID" \
+    step "installing PixiEden with real Pixi"
+    run_user env PIXIED_HOME_MODE=local PIXIED_MACHINE_ID="$MACHINE_ID" \
         bash "$RELEASE_SOURCE_DIR/install-local.sh" \
-        --home-mode local --session-manager zellij --yes
+        --home-mode local --yes
     assert_installation
-    # US-105-3
-    attach_through_pty
-    assert_session
+    verify_direnv_hook_through_pty
+    direct_shell_through_pty
+    prepare_pixi_project
+    start_nohup_pixi_job
+    assert_nohup_pixi_job
 }
 
 # @description Dispatch the requested guest phase.

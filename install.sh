@@ -21,7 +21,6 @@ Options:
     --yes                          Skip interactive confirmation prompts.
     --home-mode local|nfs          Select the account home mode.
     --local-home PATH              Set the machine-local home used by NFS mode.
-    --session-manager none|zellij  Select the runtime session manager.
     --machine-id ID                Set the machine-specific state identifier.
 
 The same installation options can be passed to `pixied install`.

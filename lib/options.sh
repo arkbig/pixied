@@ -23,7 +23,7 @@ pixied_options_capture_environment() {
     local option variable
     PIXIED_REQUESTED_HOME_MODE=""
     PIXIED_REQUESTED_LOCAL_HOME=""
-    for option in home_mode local_home session_manager machine_id pixi_home; do
+    for option in home_mode local_home machine_id pixi_home; do
         variable=PIXIED_${option^^}
         if [ -n "${!variable:-}" ]; then
             PIXIED_OPTION_ENV_SET["$option"]=1
@@ -50,13 +50,6 @@ pixied_options_validate_environment() {
         *) pixied_die "invalid home mode: $PIXIED_HOME_MODE" "$PIXIED_EXIT_USAGE" ;;
         esac
     fi
-    if [ "${PIXIED_OPTION_ENV_SET[session_manager]:-0}" -eq 1 ] &&
-        [ "${PIXIED_OPTION_CLI_SET[session_manager]:-0}" -eq 0 ]; then
-        case "$PIXIED_SESSION_MANAGER" in
-        none | zellij) ;;
-        *) pixied_die "invalid session manager: $PIXIED_SESSION_MANAGER" "$PIXIED_EXIT_USAGE" ;;
-        esac
-    fi
     if [ "${PIXIED_OPTION_ENV_SET[local_home]:-0}" -eq 1 ] &&
         [ "${PIXIED_OPTION_CLI_SET[local_home]:-0}" -eq 0 ]; then
         pixied_require_absolute_path "$PIXIED_LOCAL_HOME"
@@ -78,7 +71,6 @@ pixied_options_validate_environment() {
 # @arg $@ string The install options.
 # @set PIXIED_HOME_MODE string The requested home mode.
 # @set PIXIED_LOCAL_HOME string The requested local home.
-# @set PIXIED_SESSION_MANAGER string The requested session manager.
 # @set PIXIED_MACHINE_ID string The requested machine ID.
 # @set PIXIED_INSTALL_ASSUME_YES integer Whether prompts are skipped.
 # @exitcode 0 When parsing succeeds.
@@ -129,24 +121,6 @@ pixied_options_parse() {
             PIXIED_OPTION_CLI_SET[local_home]=1
             PIXIED_REQUESTED_LOCAL_HOME=${option#*=}
             ;;
-        --session-manager)
-            [ "$#" -ge 2 ] || pixied_die "missing value for --session-manager" "$PIXIED_EXIT_USAGE"
-            value=$2
-            case "$value" in
-            none | zellij) export PIXIED_SESSION_MANAGER=$value ;;
-            *) pixied_die "invalid session manager: $value" "$PIXIED_EXIT_USAGE" ;;
-            esac
-            PIXIED_OPTION_CLI_SET[session_manager]=1
-            shift
-            ;;
-        --session-manager=*)
-            value=${option#*=}
-            case "$value" in
-            none | zellij) export PIXIED_SESSION_MANAGER=$value ;;
-            *) pixied_die "invalid session manager: $value" "$PIXIED_EXIT_USAGE" ;;
-            esac
-            PIXIED_OPTION_CLI_SET[session_manager]=1
-            ;;
         --machine-id)
             [ "$#" -ge 2 ] || pixied_die "missing value for --machine-id" "$PIXIED_EXIT_USAGE"
             pixied_machine_id_is_safe "$2" ||
@@ -190,24 +164,18 @@ pixied_options_parse() {
     export PIXIED_INSTALL_ASSUME_YES
 }
 
-# @description Parse runtime options shared by the shell and hook commands.
-# Resolves the auto-attach setting from --auto-attach (CLI), PIXIED_AUTO_ATTACH
-# (environment), or the auto default. The resolved value is exported so a child
-# runtime inherits it. Positional arguments are collected in
-# PIXIED_RUNTIME_POSITIONAL for the command to validate after parsing.
+# @description Parse runtime arguments shared by the shell and hook commands.
+# Collects positional arguments for the command to validate after parsing and
+# recognizes the common help flags.
 #
 # @arg $@ string Runtime command arguments (flags and positionals).
-# @set PIXIED_AUTO_ATTACH string Resolved auto-attach setting (auto|none).
 # @set PIXIED_RUNTIME_POSITIONAL array Positional arguments.
-# @set PIXIED_OPTION_CLI_SET[auto_attach] integer 1 when --auto-attach was passed.
 # @set PIXIED_OPTIONS_HELP integer 1 when --help, -h, or -help was passed.
 # @exitcode 0 When parsing succeeds.
-# @exitcode 2 When an option, a value, or PIXIED_AUTO_ATTACH is invalid.
+# @exitcode 2 When an option is invalid.
 pixied_options_parse_runtime() {
-    local option value
-    PIXIED_AUTO_ATTACH=${PIXIED_AUTO_ATTACH:-auto}
+    local option
     PIXIED_RUNTIME_POSITIONAL=()
-    PIXIED_OPTION_CLI_SET[auto_attach]=0
     PIXIED_OPTIONS_HELP=0
     while [ "$#" -gt 0 ]; do
         option=$1
@@ -215,45 +183,16 @@ pixied_options_parse_runtime() {
         --help | -h | -help)
             PIXIED_OPTIONS_HELP=1
             ;;
-        --auto-attach)
-            [ "$#" -ge 2 ] || pixied_die "missing value for --auto-attach" "$PIXIED_EXIT_USAGE"
-            value=$2
-            case "$value" in
-            auto | none)
-                export PIXIED_AUTO_ATTACH=$value
-                PIXIED_OPTION_CLI_SET[auto_attach]=1
-                ;;
-            *) pixied_die "invalid auto-attach setting: $value" "$PIXIED_EXIT_USAGE" ;;
-            esac
-            shift
-            ;;
-        --auto-attach=*)
-            value=${option#*=}
-            case "$value" in
-            auto | none)
-                export PIXIED_AUTO_ATTACH=$value
-                PIXIED_OPTION_CLI_SET[auto_attach]=1
-                ;;
-            *) pixied_die "invalid auto-attach setting: $value" "$PIXIED_EXIT_USAGE" ;;
-            esac
-            ;;
         --)
             shift
-            while [ "$#" -gt 0 ]; do
-                PIXIED_RUNTIME_POSITIONAL+=("$1")
-                shift
-            done
+            PIXIED_RUNTIME_POSITIONAL+=("$@")
+            break
             ;;
         --*) pixied_die "unknown option: $option" "$PIXIED_EXIT_USAGE" ;;
         *) PIXIED_RUNTIME_POSITIONAL+=("$option") ;;
         esac
         shift
     done
-    case "$PIXIED_AUTO_ATTACH" in
-    auto | none) ;;
-    *) pixied_die "invalid auto-attach setting: $PIXIED_AUTO_ATTACH" "$PIXIED_EXIT_USAGE" ;;
-    esac
-    export PIXIED_AUTO_ATTACH
 }
 
 # @description Read one value from the interactive installation wizard.
@@ -383,7 +322,7 @@ pixied_options_preflight_nfs_local_home() {
 # @exitcode 1 When the user selects an invalid or conflicting value.
 pixied_options_wizard() {
     local state_exists=${1:-0}
-    local answer home_mode local_home local_home_default session_manager
+    local answer home_mode local_home local_home_default
     local machine_id previous_machine_id
 
     PIXIED_OPTIONS_WIZARD_COMPLETED=0
@@ -441,21 +380,6 @@ pixied_options_wizard() {
         fi
     fi
 
-    session_manager=$PIXIED_SESSION_MANAGER
-    while :; do
-        pixied_options_prompt "Session manager [zellij/none] (current: $session_manager): "
-        answer=${PIXIED_OPTIONS_ANSWER:-$session_manager}
-        case "$answer" in
-        zellij | none)
-            session_manager=$answer
-            export PIXIED_SESSION_MANAGER=$session_manager
-            PIXIED_OPTION_CLI_SET[session_manager]=1
-            break
-            ;;
-        *) pixied_warn "choose zellij or none" ;;
-        esac
-    done
-
     machine_id=$PIXIED_MACHINE_ID
     while :; do
         pixied_options_prompt "Machine ID (current: $machine_id): "
@@ -493,7 +417,6 @@ pixied_options_confirm_install() {
   Home mode: $PIXIED_HOME_MODE
   Account home: $PIXIED_ACCOUNT_HOME
   Local home: $PIXIED_LOCAL_HOME
-  Session manager: $PIXIED_SESSION_MANAGER
   Machine ID: $PIXIED_MACHINE_ID
   Pixi version: $pixi_version
   Pixi home: $PIXIED_PIXI_HOME
@@ -518,7 +441,7 @@ pixied_options_is_explicit() {
         [ "${PIXIED_OPTION_ENV_SET[$1]:-0}" -eq 1 ]
 }
 
-# @description Reject reinstall attempts that change the home mode, local home, or session manager.
+# @description Reject reinstall attempts that change the home mode or local home.
 # The existing installation must be uninstalled before changing these settings.
 # The requested values are compared against the saved state, not the resolved
 # paths, because path resolution overwrites the local home with the account
@@ -529,10 +452,6 @@ pixied_options_is_explicit() {
 pixied_options_validate_state_transition() {
     local requested_home_mode requested_local_home state_local_home
     [ "${PIXIED_STATE[state_version]+present}" = present ] || return 0
-    if pixied_options_is_explicit session_manager &&
-        [ "${PIXIED_STATE[session_manager]}" != "$PIXIED_SESSION_MANAGER" ]; then
-        pixied_die "cannot change session manager during reinstall; run uninstall first"
-    fi
     if pixied_options_is_explicit home_mode; then
         requested_home_mode=${PIXIED_REQUESTED_HOME_MODE:-$PIXIED_HOME_MODE}
         if [ "${PIXIED_STATE[home_mode]}" != "$requested_home_mode" ]; then
@@ -552,8 +471,8 @@ pixied_options_validate_state_transition() {
 
 # @description Reject active-runtime install options that change the verified identity.
 # Only acts within an active runtime where the verified state is the source of
-# truth. For each explicitly supplied option (home mode, local home, session
-# manager, machine id, pixi home), the requested value must equal the verified
+# truth. For each explicitly supplied option (home mode, local home, machine
+# id, pixi home), the requested value must equal the verified
 # state value; re-specifying the same value is allowed, but a different value is
 # rejected so the runtime cannot silently change identity from within.
 #
@@ -562,7 +481,7 @@ pixied_options_validate_state_transition() {
 pixied_install_assert_active_identity() {
     [ "${PIXIED_ACTIVE_RUNTIME:-0}" = 1 ] || return 0
     local option current state_value var_name option_name
-    for option in home_mode local_home session_manager machine_id pixi_home; do
+    for option in home_mode local_home machine_id pixi_home; do
         pixied_options_is_explicit "$option" || continue
         case "$option" in
         home_mode)
@@ -572,10 +491,6 @@ pixied_install_assert_active_identity() {
         local_home)
             var_name=PIXIED_LOCAL_HOME
             option_name=--local-home
-            ;;
-        session_manager)
-            var_name=PIXIED_SESSION_MANAGER
-            option_name=--session-manager
             ;;
         machine_id)
             var_name=PIXIED_MACHINE_ID
@@ -606,9 +521,6 @@ pixied_options_apply_state() {
     if ! pixied_options_is_explicit local_home; then
         export PIXIED_LOCAL_HOME=${PIXIED_STATE[local_home]}
     fi
-    if ! pixied_options_is_explicit session_manager; then
-        export PIXIED_SESSION_MANAGER=${PIXIED_STATE[session_manager]}
-    fi
     if ! pixied_options_is_explicit machine_id; then
         export PIXIED_MACHINE_ID=${PIXIED_STATE[machine_id]}
     fi
@@ -621,18 +533,10 @@ pixied_options_apply_state() {
     export PIXIED_COMMAND_BIN=${PIXIED_STATE[command_bin]}
 }
 
-# @description Apply fixed defaults for options not supplied by any source.
-# @exitcode 0 Always.
-pixied_options_apply_defaults() {
-    if ! pixied_options_is_explicit session_manager; then
-        export PIXIED_SESSION_MANAGER=${PIXIED_SESSION_MANAGER:-zellij}
-    fi
-}
-
 # @description Seed installation defaults from the most recently installed peer machine.
 # When a fresh machine installs in NFS mode and at least one sibling machine
 # state already exists, the newest peer's shared configuration is used as the
-# default for home mode and session manager. Machine identity, account home,
+# default for home mode. Machine identity, account home,
 # and local home are never inherited because every machine keeps its own.
 #
 # Peer selection reads the sibling state files under the machines directory and
@@ -643,10 +547,9 @@ pixied_options_apply_defaults() {
 # process state.
 #
 # @set PIXIED_HOME_MODE string Defaulted from the latest NFS peer when not explicit.
-# @set PIXIED_SESSION_MANAGER string Defaulted from the latest NFS peer when not explicit.
 # @exitcode 0 Always.
 pixied_options_apply_peer_defaults() {
-    local machines_dir mtime_list peer_file line peer_home_mode peer_session extracted
+    local machines_dir mtime_list peer_file line peer_home_mode extracted
 
     [ "${PIXIED_HOME_MODE:-}" = nfs ] || return 0
     machines_dir=${PIXIED_STATE_DIR}/machines
@@ -666,12 +569,9 @@ pixied_options_apply_peer_defaults() {
         # this install and cannot populate the current process PIXIED_STATE.
         extracted=$(
             pixied_state_load_external "$peer_file" &&
-                printf '%s|%s\n' \
-                    "${PIXIED_STATE[home_mode]:-}" \
-                    "${PIXIED_STATE[session_manager]:-}"
+                printf '%s\n' "${PIXIED_STATE[home_mode]:-}"
         ) || continue
-        peer_home_mode=${extracted%%|*}
-        peer_session=${extracted#*|}
+        peer_home_mode=$extracted
         # Only seed from a peer that also ran in NFS mode so the defaults stay
         # consistent with the requested installation. The local home is never
         # inherited because it is machine-local by definition.
@@ -686,9 +586,6 @@ pixied_options_apply_peer_defaults() {
             if ! pixied_options_is_explicit pixi_home; then
                 unset PIXIED_PIXI_HOME
             fi
-        fi
-        if ! pixied_options_is_explicit session_manager; then
-            export PIXIED_SESSION_MANAGER=$peer_session
         fi
         break
     done <"$mtime_list"
