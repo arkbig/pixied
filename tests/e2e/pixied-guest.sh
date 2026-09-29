@@ -5,6 +5,7 @@
 # as an unprivileged user and starts its dedicated Zellij session directly.
 
 set -Eeuo pipefail
+umask 022
 
 readonly PHASE="${PIXIED_E2E_PHASE:?PIXIED_E2E_PHASE is required}"
 readonly TEST_USER="pixied-e2e"

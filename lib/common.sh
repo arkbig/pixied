@@ -262,6 +262,7 @@ pixied_signal_handler() {
 # @see pixied_exit_handler
 # @see pixied_signal_handler
 pixied_enable_strict_mode() {
+    umask 022
     set -Eeuo pipefail
     trap pixied_error_handler ERR
     trap pixied_exit_handler EXIT

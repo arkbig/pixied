@@ -3,6 +3,7 @@
 # and rejects every other URL so tests stay offline.
 
 set -Eeuo pipefail
+umask 022
 
 output=""
 while [ "$#" -gt 0 ]; do

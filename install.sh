@@ -2,6 +2,7 @@
 # Download the latest PixiEden release and delegate deployment to its installer.
 
 set -Eeuo pipefail
+umask 022
 
 readonly PIXIED_RELEASE_URL="${PIXIED_RELEASE_URL:-https://github.com/arkbig/pixied/releases/latest/download/pixied.tar.gz}"
 PIXIED_INSTALL_TEMPORARY_DIR=""

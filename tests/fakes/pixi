@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+umask 022
 
 case "${1:-}" in
 --version)
@@ -16,6 +17,7 @@ global)
             cat >"$PIXI_HOME/bin/$package" <<'SCRIPT'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 case "${1:-}" in
 attach)
     if [ -n "${PIXIED_FAKE_ZELLIJ_TOUCH:-}" ]; then

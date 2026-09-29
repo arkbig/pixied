@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+umask 022
 PIXIED_FAKE_NAME=$(basename "$0")
 readonly PIXIED_FAKE_NAME
 printf '%s %s\n' "$PIXIED_FAKE_NAME" "$*" >>"${PIXIED_COMMAND_LOG:?}"

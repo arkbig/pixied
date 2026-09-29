@@ -116,6 +116,14 @@ PYPROJECT
     # Override the host-derived uid/gid so the build is deterministic regardless of
     # the test runner's own uid (a root runner would break useradd --uid 0).
     printf 'CONTAINER_UID=1000\nCONTAINER_GID=1000\n' >"$project/.devcontainer/.env"
+    if grep -Fq -- 'ENV PATH=' "$project/.devcontainer/Dockerfile" ||
+        grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' \
+            "$project/.devcontainer/Dockerfile"; then
+        pixied_test_fail "DevContainer Dockerfile still configures the Pixi environment PATH"
+    fi
+    grep -Fq -- '"postCreateCommand": "pixi install' \
+        "$project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer does not defer shell activation to postCreateCommand"
 
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
@@ -132,10 +140,6 @@ PYPROJECT
     assert_success
     [ "$output" = "/opt/pixi" ] || pixied_test_fail "container did not forward PIXI_HOME=/opt/pixi"
 
-    run docker run --rm -v "$project":/workspace -w /workspace "$tag" bash -c 'echo "$PATH"'
-    assert_success
-    printf '%s\n' "$output" | grep -q -- '/opt/pixi/bin' ||
-        pixied_test_fail "container PATH did not include /opt/pixi/bin"
 }
 
 @test "generate devcontainer entrypoint fails when .env is missing" {
@@ -194,9 +198,9 @@ PYPROJECT
 
     grep -Fq -- 'COPY pixi.toml pixi.lock ./' "$project/.devcontainer/Dockerfile" ||
         pixied_test_fail "locked fixture does not use a direct manifest and lock COPY"
-    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --locked' \
+    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --all --locked' \
         "$project/.devcontainer/Dockerfile" ||
-        pixied_test_fail "locked fixture does not use pixi install --locked"
+        pixied_test_fail "locked fixture does not use pixi install --all --locked"
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success
 }

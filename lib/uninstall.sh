@@ -971,6 +971,7 @@ pixied_launcher_nfs_dispatcher_content() {
     printf -v state_root_literal '%q' "$state_root"
     content="#!/usr/bin/env bash"$'\n'
     content+="set -Eeuo pipefail"$'\n'
+    content+="umask 022"$'\n'
     content+="state_root=$state_root_literal"$'\n'
     content+='release_store="$state_root/release-store"'$'\n'
     content+='fail() { printf "%s\n" "[pixied] ERROR $*" >&2; exit 1; }'$'\n'

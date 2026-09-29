@@ -282,18 +282,15 @@ assert_semver() {
         pixied_test_fail "DevContainer Dockerfile does not use the pinned Pixi version"
     grep -Fq -- 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-plucky' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not use the plucky base image"
-    grep -Fq -- 'ENV PATH=${PIXI_HOME}/projects/bin:${PIXI_HOME}/bin:' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not preserve the project and global Pixi paths"
+    if grep -Fq -- 'ENV PATH=' "$dc_df" ||
+        grep -Fq -- 'environment_dir=' "$dc_df" ||
+        grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' "$dc_df"; then
+        pixied_test_fail "DevContainer Dockerfile still configures the Pixi environment PATH"
+    fi
     grep -Fq -- 'printf '\''detached-environments = "%s/projects"\n'\'' "$PIXI_HOME" > "$PIXI_HOME/config.toml"' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not configure the project detached Pixi environment"
-    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --locked' "$dc_df" ||
+    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --all --locked' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not install with the configured Pixi home"
-    grep -Fq -- '*/envs/default' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not locate the default environment directory"
-    grep -Fq -- 'install -d -o "$CONTAINER_UID" -g "$CONTAINER_GID" -- "$environment_bin"' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not create an empty project bin directory"
-    grep -Fq -- 'ln -s -- "$environment_bin" "$PIXI_HOME/projects/bin"' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not expose the project environment through the configured Pixi home"
     run_line=$(grep -n -- '. /workspace/.devcontainer/.env' "$dc_df" | head -n1 | cut -d: -f1)
     [ -n "$run_line" ] ||
         pixied_test_fail "DevContainer Dockerfile does not source the devcontainer .env"
@@ -333,13 +330,24 @@ assert_semver() {
     grep -Fq -- '"remoteUser": "app"' \
         "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
         pixied_test_fail "DevContainer does not select the app remote user"
-    grep -Fq -- '"initializeCommand": ["${localWorkspaceFolder}/.devcontainer/generate-env.sh"]' \
+    grep -Fq -- '"initializeCommand": [' \
         "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
         pixied_test_fail "DevContainer does not generate .env before the build"
-    if grep -Eq -- '"(onCreateCommand|postCreateCommand)"' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
-        pixied_test_fail "DevContainer generates .env from a post-build lifecycle hook"
-    fi
+    grep -Fq -- '${localWorkspaceFolder}/.devcontainer/generate-env.sh' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer does not generate .env before the build"
+    grep -Fq -- '"postCreateCommand": "pixi install' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer does not install Pixi after creation"
+    grep -Fq -- '/workspace/pixi.toml' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer post-create hook does not use the selected manifest"
+    grep -Fq -- 'shell-hook' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer post-create hook does not append the Pixi shell hook"
+    grep -Fq -- '>> ~/.bashrc' \
+        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer post-create hook does not update .bashrc"
     if grep -Fq -- '"remoteEnv"' \
         "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
         pixied_test_fail "DevContainer should not override the internal PIXI_HOME in remoteEnv"
@@ -421,6 +429,7 @@ assert_semver() {
     local valid_project="$PIXIED_TEST_ROOT/def-valid"
     local invalid_project="$PIXIED_TEST_ROOT/def-invalid"
     local locked_project="$PIXIED_TEST_ROOT/def-pyproject-locked"
+    local valid_devcontainer_dockerfile valid_devcontainer_json
     mkdir -p "$home" "$valid_project" "$invalid_project" "$locked_project"
     cat >"$valid_project/pyproject.toml" <<'PYPROJECT'
 [project]
@@ -445,6 +454,17 @@ PYPROJECT
     assert_success
     [ -f "$valid_project/.devcontainer/Dockerfile" ] ||
         pixied_test_fail "DevContainer Dockerfile was not generated for a pyproject workspace"
+    valid_devcontainer_dockerfile="$valid_project/.devcontainer/Dockerfile"
+    valid_devcontainer_json="$valid_project/.devcontainer/devcontainer.json"
+    if grep -Fq -- 'pixi install' "$valid_devcontainer_dockerfile" ||
+        grep -Fq -- 'ENV PATH=' "$valid_devcontainer_dockerfile" ||
+        grep -Fq -- 'environment_dir=' "$valid_devcontainer_dockerfile"; then
+        pixied_test_fail "pyproject DevContainer Dockerfile still installs or exposes the Pixi environment"
+    fi
+    grep -Fq -- '"postCreateCommand": "pixi install' "$valid_devcontainer_json" ||
+        pixied_test_fail "pyproject DevContainer does not defer Pixi install to postCreateCommand"
+    grep -Fq -- '/workspace/pyproject.toml' "$valid_devcontainer_json" ||
+        pixied_test_fail "pyproject DevContainer post-create hook does not use pyproject.toml"
 
     run env HOME="$home" bash -c \
         'cd -- "$1" && bash "$2" generate devcontainer' bash "$invalid_project" "$cli"
@@ -489,7 +509,7 @@ PYPROJECT
     grep -Fq -- 'rm -f -- pixi.lock' \
         "$lock_project/.devcontainer/Dockerfile" ||
         pixied_test_fail "lockfile-only DevContainer does not remove the lockfile before init"
-    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install"' \
+    grep -Fq -- 'PIXI_HOME=$PIXI_HOME pixi install --all"' \
         "$lock_project/.devcontainer/Dockerfile" ||
         pixied_test_fail "lockfile-only DevContainer does not use an unlocked install"
 
@@ -550,11 +570,11 @@ ENV_TEMPLATE
         pixied_test_fail "generated .env does not have mode 0600"
     cat >"$expected_env" <<'ENV_OUTPUT'
 # Project settings
-export PROJECT_NAME=pixied # Project label
+export PROJECT_NAME=pixied
 
-PROJECT_VALUE=ready # Generated on the host
-PROJECT_LABEL=pixied\ #\ stable # Literal hash
-PROJECT_NUMBER=5 # Arithmetic value
+PROJECT_VALUE=ready
+PROJECT_LABEL=pixied\ #\ stable
+PROJECT_NUMBER=5
 ENV_OUTPUT
     cmp -s "$expected_env" "$env_dir/.env" ||
         pixied_test_fail "generated .env did not preserve the template layout"
@@ -760,6 +780,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         source_root=$3
@@ -796,6 +817,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         source_root=$3
@@ -829,6 +851,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         source_root=$3
@@ -857,6 +880,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         source_root=$3
@@ -874,6 +898,7 @@ ENV_OUTPUT
     printf 'not-a-current-pointer\n' >"$state/release-store/current"
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         . "$repo/lib/common.sh"
@@ -890,6 +915,7 @@ ENV_OUTPUT
     printf 'tampered\n' >>"$state/release-store/releases/1.2.3/release-manifest"
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         . "$repo/lib/common.sh"
@@ -912,6 +938,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         source_root=$3
@@ -937,6 +964,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         . "$repo/lib/common.sh"
@@ -951,6 +979,7 @@ ENV_OUTPUT
 
     run env HOME="$home" PIXIED_HOME_MODE=nfs bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         . "$repo/lib/common.sh"
@@ -989,6 +1018,7 @@ ENV_OUTPUT
     run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
         PIXIED_STATE_DIR="$state" bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         shift 2
@@ -1074,6 +1104,7 @@ ENV_OUTPUT
     run env -i PATH="$PATH" HOME="$home" PIXIED_HOME_MODE=nfs \
         PIXIED_STATE_DIR="$state" bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         state=$2
         old_source=$3
@@ -1118,6 +1149,7 @@ ENV_OUTPUT
 
     run env HOME="$home" bash -c '
         set -Eeuo pipefail
+        umask 022
         repo=$1
         source_root=$2
         destination=$3
@@ -1518,6 +1550,7 @@ ENV_OUTPUT
     cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -1543,6 +1576,7 @@ CURL
     cat >"$fake_bin/mkdir" <<'MKDIR'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 for argument in "$@"; do
     if [ "$argument" = "${PIXIED_EXPECTED_MKDIR_PATH:?}" ]; then
         printf '%s\n' "$*" >>"${PIXIED_MKDIR_LOG:?}"
@@ -1813,6 +1847,7 @@ MKDIR
     cat >"$fake_bin/mkdir" <<'MKDIR'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 for argument in "$@"; do
     case "$argument" in
     /local | /local/*)
@@ -2084,6 +2119,7 @@ MKDIR
     cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -2151,6 +2187,7 @@ CURL
     cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -2176,6 +2213,7 @@ CURL
     cat >"$fake_bin/mkdir" <<'MKDIR'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 for argument in "$@"; do
     if [ "$argument" = "${PIXIED_EXPECTED_MKDIR_PATH:?}" ]; then
         printf '%s\n' "$*" >>"${PIXIED_MKDIR_LOG:?}"
@@ -2216,6 +2254,7 @@ MKDIR
     cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -2256,6 +2295,7 @@ CURL
     cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -2295,6 +2335,7 @@ CURL
     cat >"$fake_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -5512,6 +5553,7 @@ EOF
         PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
         bash -c '
             set -Eeuo pipefail
+            umask 022
             repo=$1
             . "$repo/install-local.sh"
             pixied_release_select_current() { return 1; }

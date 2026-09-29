@@ -4,6 +4,7 @@
 # tag and the packaged version cannot drift.
 
 set -Eeuo pipefail
+umask 022
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly REPO_ROOT
