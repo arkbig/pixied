@@ -450,6 +450,7 @@ DOCKERFILE
         printf 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-trixie AS builder\n'
     fi
     cat <<'DOCKERFILE'
+
 ARG PIXI_ENVIRONMENT_NAME=default
 
 ENV PIXI_HOME=/opt/pixi
@@ -488,6 +489,7 @@ DOCKERFILE
         printf 'FROM ghcr.io/prefix-dev/pixi:${PIXI_VERSION}-trixie-slim AS runner\n'
     fi
     cat <<'DOCKERFILE'
+
 ARG PIXI_ENVIRONMENT_NAME=default
 ARG APP_UID=1000
 ARG APP_GID=1000
@@ -568,7 +570,7 @@ DEVCONTAINER
     printf '%s%s%s\n' \
         '    "postCreateCommand": "pixi install && echo '\''eval \"$(pixi shell-hook --manifest-path /workspace/' \
         "$definition_name" \
-        ' 2>/dev/null)"'\'' >> ~/.bashrc"'
+        ' 2>/dev/null)\"'\'' >> ~/.bashrc"'
     cat <<'DEVCONTAINER'
 }
 DEVCONTAINER
