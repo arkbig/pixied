@@ -116,9 +116,13 @@ PYPROJECT
             "$project/.devcontainer/Dockerfile"; then
         pixied_test_fail "DevContainer Dockerfile still configures the Pixi environment PATH"
     fi
-    grep -Fq -- '"postCreateCommand": "pixi install' \
+    grep -Fq -- '"postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postCreateCommand.sh"' \
         "$project/.devcontainer/devcontainer.json" ||
-        pixied_test_fail "DevContainer does not defer shell activation to postCreateCommand"
+        pixied_test_fail "DevContainer does not defer shell activation to the post-create script"
+    [ -x "$project/.devcontainer/postCreateCommand.sh" ] ||
+        pixied_test_fail "DevContainer did not generate an executable post-create script"
+    grep -Fq -- 'VOLUME /workspace/.pixi' "$project/.devcontainer/Dockerfile" ||
+        pixied_test_fail "DevContainer Dockerfile does not isolate the project Pixi directory"
 
     run docker build -f "$project/.devcontainer/Dockerfile" -t "$tag" "$project"
     assert_success

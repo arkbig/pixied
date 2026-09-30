@@ -512,8 +512,9 @@ DOCKERFILE
 
 # @description Return the simple Dev Container Dockerfile content.
 # The image provides the pinned Pixi binary and isolates detached environments
-# from the host. Project installation is deferred until the workspace is
-# mounted and the Dev Container post-create command runs.
+# from the host. The project Pixi directory is declared as a volume so it never
+# resolves through the host bind mount. Project installation is deferred until
+# the workspace is mounted and the Dev Container post-create command runs.
 #
 # @arg $1 string The resolved Pixi version.
 # @stdout The generated Dockerfile content.
@@ -544,6 +545,9 @@ RUN mkdir -p /opt/pixi/envs && \
     pixi config set --global detached-environments /opt/pixi/envs && \
     chown -R vscode:vscode /opt/pixi
 
+# Isolate container environment to prevent path conflicts with host.
+VOLUME /workspace/.pixi
+
 # Install additional packages if needed.
 # RUN apt-get update && apt-get install -y --no-install-recommends \
 #         listing-additional-packages && \
@@ -552,11 +556,13 @@ DOCKERFILE
 }
 
 # @description Return the Dev Container definition content.
-# @arg $1 string The Pixi definition filename used by the shell hook.
+# The workspace is bind-mounted from the host while the project Pixi directory
+# is kept on a per-user named volume, and the post-create work is delegated to
+# the generated postCreateCommand.sh script.
+#
 # @stdout The generated devcontainer.json content.
 # @exitcode 0 Always.
 pixied_generate_devcontainer_json_content() {
-    local definition_name=$1
     cat <<'DEVCONTAINER'
 {
     "name": "Pixi project",
@@ -566,14 +572,71 @@ pixied_generate_devcontainer_json_content() {
     },
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
-DEVCONTAINER
-    printf '%s%s%s\n' \
-        '    "postCreateCommand": "pixi install && echo '\''eval \"$(pixi shell-hook --manifest-path /workspace/' \
-        "$definition_name" \
-        ' 2>/dev/null)\"'\'' >> ~/.bashrc"'
-    cat <<'DEVCONTAINER'
+    "mounts": [
+        // To remove the volume:
+        // 1. `docker volume ls` - Find the volume name ($USER-$DirectoryName-pixi).
+        // 2. `docker volume rm <target>` - Delete the target volume.
+        "source=${localEnv:USER}-${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume"
+        // Optional: Mount .pixi/config.toml to share with the DevContainer.
+        // "source=${localWorkspaceFolder}/.pixi/config.toml,target=${containerWorkspaceFolder}/.pixi/config.toml,type=bind"
+    ],
+    "postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postCreateCommand.sh"
 }
 DEVCONTAINER
+}
+
+# @description Return the Dev Container post-create script content.
+# The script installs the project Pixi environment once the workspace is
+# mounted, appends the Pixi shell hook of the detected manifest to the container
+# ~/.bashrc, and finally runs an optional postCreateCommand.local.sh so project
+# setup survives regeneration of this file.
+#
+# @stdout The generated postCreateCommand.sh content.
+# @exitcode 0 Always.
+pixied_generate_devcontainer_post_create_content() {
+    cat <<'POSTCREATE'
+#!/usr/bin/env bash
+#
+# Post-create command script for the DevContainer.
+
+set -Eeuo pipefail
+umask 022
+
+workspace_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+local_script="$(dirname -- "${BASH_SOURCE[0]}")/postCreateCommand.local.sh"
+if [ -f "$workspace_dir/pixi.toml" ]; then
+    manifest_path="$workspace_dir/pixi.toml"
+elif [ -f "$workspace_dir/pyproject.toml" ]; then
+    manifest_path="$workspace_dir/pyproject.toml"
+else
+    manifest_path="$workspace_dir/pixi.toml"
+fi
+
+install_pixi() {
+    local pixi_shell_hook
+    pixi_shell_hook="eval \"\$(pixi shell-hook --manifest-path $manifest_path 2>/dev/null)\""
+
+    sudo chown -R vscode:vscode "$workspace_dir/.pixi"
+    pixi install
+
+    touch "$HOME/.bashrc"
+    if ! grep -Fqx "$pixi_shell_hook" "$HOME/.bashrc"; then
+        printf '%s\n' "$pixi_shell_hook" >>"$HOME/.bashrc"
+    fi
+}
+
+run_local_script() {
+    if [ -f "$local_script" ]; then
+        /usr/bin/env bash "$local_script"
+    fi
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    install_pixi
+    run_local_script
+    echo "Post-create commands completed. You may need to reload window for changes to take effect."
+fi
+POSTCREATE
 }
 
 # @description Check that a generated output path is not already present.
@@ -762,7 +825,9 @@ pixied_generate_dockerfile() {
 }
 
 # @description Generate the Dev Container files.
-# Writes Dockerfile and devcontainer.json into .devcontainer.
+# Writes Dockerfile, devcontainer.json, and the post-create script into
+# .devcontainer. The post-create script is executable and is never confused with
+# the optional project-local postCreateCommand.local.sh, which is left untouched.
 #
 # @arg $1 integer Enable force mode (1) or not (0).
 # @arg $2 string The project root.
@@ -773,24 +838,27 @@ pixied_generate_devcontainer() {
     local force=$1 root=$2 pixi_version=$3
     local dir="$root/.devcontainer"
     local dockerfile="$dir/Dockerfile" json="$dir/devcontainer.json"
-    local definition_name=pyproject.toml content
-    local df_temp json_temp
-    if [ -e "$root/pixi.toml" ] || [ -L "$root/pixi.toml" ]; then
-        definition_name=pixi.toml
-    fi
+    local post_create="$dir/postCreateCommand.sh"
+    local content
+    local df_temp json_temp script_temp
     pixied_run mkdir -p -- "$dir"
     if [ "$force" -eq 0 ]; then
         pixied_generate_require_new_path "$dockerfile"
         pixied_generate_require_new_path "$json"
+        pixied_generate_require_new_path "$post_create"
     fi
     content=$(pixied_generate_devcontainer_dockerfile_content "$pixi_version")
     df_temp=$(pixied_generate_make_temp "$dockerfile" "$content" 0644)
-    content=$(pixied_generate_devcontainer_json_content "$definition_name")
+    content=$(pixied_generate_devcontainer_json_content)
     json_temp=$(pixied_generate_make_temp "$json" "$content" 0644)
+    content=$(pixied_generate_devcontainer_post_create_content)
+    script_temp=$(pixied_generate_make_temp "$post_create" "$content" 0755)
     pixied_generate_commit_files "$force" \
         "$dockerfile" "$df_temp" \
-        "$json" "$json_temp"
+        "$json" "$json_temp" \
+        "$post_create" "$script_temp"
     pixied_success "Generated files in $dir:"
     pixied_success "  ${dockerfile##*/}"
     pixied_success "  ${json##*/}"
+    pixied_success "  ${post_create##*/}"
 }

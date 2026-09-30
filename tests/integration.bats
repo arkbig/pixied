@@ -282,33 +282,38 @@ assert_semver() {
         pixied_test_fail "DevContainer Dockerfile does not create the detached environment directory"
     grep -Fq -- 'pixi config set --global detached-environments /opt/pixi/envs' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not configure detached environments"
+    grep -Fq -- 'VOLUME /workspace/.pixi' "$dc_df" ||
+        pixied_test_fail "DevContainer Dockerfile does not isolate the project Pixi directory"
     if grep -Fq -- '.env' "$dc_df" || grep -Fq -- 'ENTRYPOINT' "$dc_df"; then
         pixied_test_fail "DevContainer Dockerfile still depends on .env or an entrypoint"
     fi
-    grep -Fq -- '"postCreateCommand": "pixi install' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
-        pixied_test_fail "DevContainer does not install Pixi after creation"
-    grep -Fq -- '/workspace/pixi.toml' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
-        pixied_test_fail "DevContainer post-create hook does not prefer pixi.toml"
-    if grep -Fq -- '/workspace/pyproject.toml' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
-        pixied_test_fail "DevContainer post-create hook used pyproject.toml despite pixi.toml being present"
-    fi
-    grep -Fq -- 'shell-hook' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
-        pixied_test_fail "DevContainer post-create hook does not append the Pixi shell hook"
-    grep -Fq -- '>> ~/.bashrc' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json" ||
-        pixied_test_fail "DevContainer post-create hook does not update .bashrc"
-    if grep -Fq -- '"remoteEnv"' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
+    local dc_json dc_script
+    dc_json="$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"
+    dc_script="$PIXIED_TEST_ROOT/project/.devcontainer/postCreateCommand.sh"
+    grep -Fq -- '"postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postCreateCommand.sh"' \
+        "$dc_json" ||
+        pixied_test_fail "DevContainer does not delegate the post-create work to postCreateCommand.sh"
+    grep -Fq -- 'source=${localEnv:USER}-${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume' \
+        "$dc_json" ||
+        pixied_test_fail "DevContainer does not keep the Pixi directory on a per-user named volume"
+    if grep -Fq -- '"remoteEnv"' "$dc_json"; then
         pixied_test_fail "DevContainer should not override the internal PIXI_HOME in remoteEnv"
     fi
-    if grep -Fq -- '"type=volume,target=/workspace/.pixi"' \
-        "$PIXIED_TEST_ROOT/project/.devcontainer/devcontainer.json"; then
-        pixied_test_fail "DevContainer must not mount .pixi as a volume"
-    fi
+    [ -x "$dc_script" ] || pixied_test_fail "postCreateCommand.sh was not generated as an executable file"
+    run bash -n "$dc_script"
+    assert_success
+    grep -Fq -- 'pixi install' "$dc_script" ||
+        pixied_test_fail "postCreateCommand.sh does not install Pixi after creation"
+    grep -Fq -- 'sudo chown -R vscode:vscode "$workspace_dir/.pixi"' "$dc_script" ||
+        pixied_test_fail "postCreateCommand.sh does not return the mounted Pixi directory to the container user"
+    grep -Fq -- 'if [ -f "$workspace_dir/pixi.toml" ]; then' "$dc_script" ||
+        pixied_test_fail "postCreateCommand.sh does not prefer pixi.toml over pyproject.toml"
+    grep -Fq -- 'pixi shell-hook --manifest-path $manifest_path' "$dc_script" ||
+        pixied_test_fail "postCreateCommand.sh does not append the Pixi shell hook"
+    grep -Fq -- '>>"$HOME/.bashrc"' "$dc_script" ||
+        pixied_test_fail "postCreateCommand.sh does not update .bashrc"
+    grep -Fq -- 'postCreateCommand.local.sh' "$dc_script" ||
+        pixied_test_fail "postCreateCommand.sh does not run the project-local post-create script"
     for obsolete in .env .env.example .gitignore generate-env.sh entrypoint.sh; do
         [ ! -e "$PIXIED_TEST_ROOT/project/.devcontainer/$obsolete" ] ||
             pixied_test_fail "DevContainer generated obsolete file: $obsolete"
@@ -386,7 +391,7 @@ assert_semver() {
     local valid_project="$PIXIED_TEST_ROOT/def-valid"
     local invalid_project="$PIXIED_TEST_ROOT/def-invalid"
     local locked_project="$PIXIED_TEST_ROOT/def-pyproject-locked"
-    local valid_devcontainer_dockerfile valid_devcontainer_json
+    local valid_devcontainer_dockerfile valid_devcontainer_json valid_devcontainer_script
     mkdir -p "$home" "$valid_project" "$invalid_project" "$locked_project"
     cat >"$valid_project/pyproject.toml" <<'PYPROJECT'
 [project]
@@ -413,15 +418,18 @@ PYPROJECT
         pixied_test_fail "DevContainer Dockerfile was not generated for a pyproject workspace"
     valid_devcontainer_dockerfile="$valid_project/.devcontainer/Dockerfile"
     valid_devcontainer_json="$valid_project/.devcontainer/devcontainer.json"
+    valid_devcontainer_script="$valid_project/.devcontainer/postCreateCommand.sh"
     if grep -Fq -- 'pixi install' "$valid_devcontainer_dockerfile" ||
         grep -Fq -- 'ENV PATH=' "$valid_devcontainer_dockerfile" ||
         grep -Fq -- 'environment_dir=' "$valid_devcontainer_dockerfile"; then
         pixied_test_fail "pyproject DevContainer Dockerfile still installs or exposes the Pixi environment"
     fi
-    grep -Fq -- '"postCreateCommand": "pixi install' "$valid_devcontainer_json" ||
-        pixied_test_fail "pyproject DevContainer does not defer Pixi install to postCreateCommand"
-    grep -Fq -- '/workspace/pyproject.toml' "$valid_devcontainer_json" ||
-        pixied_test_fail "pyproject DevContainer post-create hook does not use pyproject.toml"
+    grep -Fq -- 'postCreateCommand.sh' "$valid_devcontainer_json" ||
+        pixied_test_fail "pyproject DevContainer does not defer Pixi install to postCreateCommand.sh"
+    [ -f "$valid_devcontainer_script" ] ||
+        pixied_test_fail "pyproject DevContainer did not generate the post-create script"
+    grep -Fq -- 'manifest_path="$workspace_dir/pyproject.toml"' "$valid_devcontainer_script" ||
+        pixied_test_fail "pyproject DevContainer post-create script does not fall back to pyproject.toml"
 
     run env HOME="$home" bash -c \
         'cd -- "$1" && bash "$2" generate devcontainer' bash "$invalid_project" "$cli"
@@ -430,6 +438,8 @@ PYPROJECT
         pixied_test_fail "DevContainer generation should not validate project manifests"
     [ -f "$invalid_project/.devcontainer/devcontainer.json" ] ||
         pixied_test_fail "DevContainer JSON was not generated for an invalid manifest"
+    [ -f "$invalid_project/.devcontainer/postCreateCommand.sh" ] ||
+        pixied_test_fail "DevContainer post-create script was not generated for an invalid manifest"
 
     run env HOME="$home" bash -c \
         'cd -- "$1" && bash "$2" generate dockerfile' bash "$invalid_project" "$cli"
@@ -469,6 +479,8 @@ PYPROJECT
         grep -Fq -- '.env' "$lock_project/.devcontainer/Dockerfile"; then
         pixied_test_fail "simple DevContainer Dockerfile should not copy project inputs"
     fi
+    [ -x "$lock_project/.devcontainer/postCreateCommand.sh" ] ||
+        pixied_test_fail "lockfile-only DevContainer did not generate an executable post-create script"
 
     run env HOME="$lock_home" bash -c \
         'cd -- "$1" && bash "$2" generate dockerfile' bash "$lock_project" "$cli"
@@ -556,6 +568,8 @@ PYPROJECT
         pixied_test_fail "--force did not create a .bak backup for the DevContainer Dockerfile"
     [ -f "$project/.devcontainer/devcontainer.json.bak" ] ||
         pixied_test_fail "--force did not create a .bak backup for the devcontainer.json"
+    [ -f "$project/.devcontainer/postCreateCommand.sh.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for the post-create script"
     for obsolete in .env.example .gitignore generate-env.sh entrypoint.sh; do
         [ ! -e "$project/.devcontainer/$obsolete" ] ||
             pixied_test_fail "generation created obsolete file: $obsolete"

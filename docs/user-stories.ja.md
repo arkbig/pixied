@@ -210,7 +210,7 @@ NFSホームを使う開発者として、必要なshell設定だけをmachine-l
    **Then**`generate devcontainer`/`generate dockerfile`は既定で上書きせずエラーで終了し、`--force`で上書き(直前のファイルを`<name>.bak`へ1世代backup)する。`generate direnv`は既存`.envrc`へ重複なくブロックを挿入するため、`--force`を指定しても無視して同じ結果になる。
 5. **Given**生成されたコンテナ定義を利用する
    **When**DevContainerまたはDockerでプロジェクトを起動する
-   **Then**グローバルPixiの前提とプロジェクトPixiの依存関係が分離され、ホストのPixi環境を変更しない。
+   **Then**グローバルPixiの前提とプロジェクトPixiの依存関係が分離され、ホストのPixi環境を変更しない。DevContainerでは`postCreateCommand.sh`が`pixi.toml`を優先してmanifestを解決し、プロジェクト環境のinstallと`~/.bashrc`へのshell hook追加を行い、`.pixi`がuserごとのnamed volumeにisolationされるためhostの`.pixi`を変更しない。プロジェクト固有の追加処理は任意の`postCreateCommand.local.sh`で実行でき、生成をやり直しても残される。
 
 ## US-109
 

@@ -116,7 +116,7 @@ READMEに示す`PIXIED_DATA_DIR`、`PIXIED_CONFIG_DIR`、`PIXIED_STATE_DIR`、`P
 |`lib/sync.sh`|NFS modeの8ファイルallowlist、`account→local`の一方向`reconcile`。|
 |`lib/session.sh`|child commandとruntime内の対話Bashの起動。|
 |`lib/uninstall.sh`|state・path・owner・hashの検証、共有resourceの保持、quarantineを使うuninstallと復旧。|
-|`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer・Dockerfileの生成。|
+|`lib/generate.sh`|project rootとPixi定義の検証、direnv・DevContainer(`Dockerfile`、`devcontainer.json`、`postCreateCommand.sh`)・Dockerfileの生成。|
 
 installはaccount home、home mode、local home、XDG pathを副作用の前に解決する。`nfs`modeではPixi data、config、cache、lockをlocal home側へ置き、`local`modeでは専用data directory配下へ置く。state registryとaccount側launcherだけは共有し、launcherはcurrent machineのstateからlocal payloadへdispatchする。すべてのPixi呼び出しは専用binaryを絶対pathで実行し、runtime内で専用`PIXI_HOME`、`PIXI_CACHE_DIR`、`PIXI_NO_PATH_UPDATE=1`を設定する。
 
