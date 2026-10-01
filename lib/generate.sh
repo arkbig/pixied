@@ -544,8 +544,8 @@ VOLUME /workspace/.pixi
 
 # Install additional packages if needed.
 # RUN apt-get update && apt-get install -y --no-install-recommends \
-#         listing-additional-packages && \
-#     rm -rf /var/lib/apt/lists/*
+#         listing-additional-packages \
+#     && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
 }
 
