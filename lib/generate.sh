@@ -539,12 +539,6 @@ FROM mcr.microsoft.com/devcontainers/base:noble
 
 COPY --from=pixi-provider /usr/local/bin/pixi /usr/local/bin/
 
-# Isolate container environment to prevent path conflicts with host
-ENV PIXI_HOME=/opt/pixi
-RUN mkdir -p /opt/pixi/envs && \
-    pixi config set --global detached-environments /opt/pixi/envs && \
-    chown -R vscode:vscode /opt/pixi
-
 # Isolate container environment to prevent path conflicts with host.
 VOLUME /workspace/.pixi
 

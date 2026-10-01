@@ -276,12 +276,6 @@ assert_semver() {
         pixied_test_fail "DevContainer Dockerfile does not use the noble base image"
     grep -Fq -- 'COPY --from=pixi-provider /usr/local/bin/pixi /usr/local/bin/' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not copy the Pixi binary"
-    grep -Fq -- 'ENV PIXI_HOME=/opt/pixi' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not define PIXI_HOME"
-    grep -Fq -- 'mkdir -p /opt/pixi/envs' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not create the detached environment directory"
-    grep -Fq -- 'pixi config set --global detached-environments /opt/pixi/envs' "$dc_df" ||
-        pixied_test_fail "DevContainer Dockerfile does not configure detached environments"
     grep -Fq -- 'VOLUME /workspace/.pixi' "$dc_df" ||
         pixied_test_fail "DevContainer Dockerfile does not isolate the project Pixi directory"
     if grep -Fq -- '.env' "$dc_df" || grep -Fq -- 'ENTRYPOINT' "$dc_df"; then
