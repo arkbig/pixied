@@ -283,6 +283,9 @@ pixied_runtime_export_environment() {
 # The child is deliberately not exec'd so the caller can decide whether a
 # successful exit permits later work in a future runtime phase. The child's
 # status, including the conventional 128-plus-signal status, is preserved.
+# A child failure is an expected result, not a pixied error: the ERR trap is
+# disabled before returning it so no pixied error output is printed and the
+# EXIT trap stays quiet via PIXIED_ERROR_REPORTED.
 #
 # @arg $@ string The child command and arguments.
 # @exitcode The child process exit status.
@@ -298,6 +301,9 @@ pixied_runtime_wait_for_child() {
     # Suppress the EXIT trap's duplicate error message. Future sync decisions
     # must use this function's return status, not PIXIED_ERROR_REPORTED.
     export PIXIED_ERROR_REPORTED=1
+    if [ "$child_status" -ne "$PIXIED_EXIT_OK" ]; then
+        trap - ERR
+    fi
     return "$child_status"
 }
 
