@@ -119,6 +119,23 @@ PYPROJECT
     grep -Fq -- '"postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postCreateCommand.sh"' \
         "$project/.devcontainer/devcontainer.json" ||
         pixied_test_fail "DevContainer does not defer shell activation to the post-create script"
+    grep -Fq -- '"compose.yaml"' "$project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer does not build through compose.yaml"
+    grep -Fq -- '"compose.override.yaml"' "$project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer does not accept compose.override.yaml"
+    grep -Fq -- 'source=${localEnv:USER}-${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume' \
+        "$project/.devcontainer/devcontainer.json" ||
+        pixied_test_fail "DevContainer does not keep the Pixi directory on a per-user named volume"
+    if grep -Fq -- 'localEnv' "$project/.devcontainer/compose.yaml" ||
+        grep -Fq -- 'localEnv' "$project/.devcontainer/compose.override.yaml"; then
+        pixied_test_fail "compose files must not use devcontainer variables that docker compose cannot interpolate"
+    fi
+    [ -f "$project/.devcontainer/compose.yaml" ] ||
+        pixied_test_fail "compose.yaml was not generated"
+    [ -f "$project/.devcontainer/compose.override.yaml" ] ||
+        pixied_test_fail "compose.override.yaml was not generated"
+    [ -f "$project/.devcontainer/.gitignore" ] ||
+        pixied_test_fail ".gitignore was not generated"
     [ -x "$project/.devcontainer/postCreateCommand.sh" ] ||
         pixied_test_fail "DevContainer did not generate an executable post-create script"
     grep -Fq -- 'VOLUME /workspace/.pixi' "$project/.devcontainer/Dockerfile" ||

@@ -48,7 +48,7 @@ pixied_install_deploy_source() {
     local source_root=$1 destination=$2
     local file created_data
     local deploy_bin="bin/pixied"
-    local -a deploy_libs=()
+    local -a deploy_libs=() deploy_templates=()
     local stage_dir backup_dir target backup entry file_kind
     local -a manifest_entries=()
     local pixied_promote_rc pixied_promote_err_trap pixied_prev_int_trap pixied_prev_term_trap
@@ -65,6 +65,7 @@ pixied_install_deploy_source() {
         case "$file" in
         install-local.sh) ;;
         bin/pixied) deploy_bin=$file ;;
+        lib/templates/*/*.tmpl | lib/templates/*/*.tmpl.*) deploy_templates+=("$file") ;;
         lib/*.sh) deploy_libs+=("$file") ;;
         esac
     done
@@ -76,7 +77,7 @@ pixied_install_deploy_source() {
     fi
     export PIXIED_DEPLOY_CREATED_DATA=$created_data
     [ -f "$source_root/$deploy_bin" ] || pixied_die "source file is missing: $deploy_bin"
-    for file in "${deploy_libs[@]}"; do
+    for file in "${deploy_libs[@]}" "${deploy_templates[@]}"; do
         [ -f "$source_root/$file" ] || pixied_die "source file is missing: $file"
     done
 
@@ -90,25 +91,26 @@ pixied_install_deploy_source() {
     pixied_register_temp "$backup_dir"
 
     pixied_step "Staging PixiEden deployment under $stage_dir"
-    pixied_run mkdir -p "$stage_dir/bin" "$stage_dir/lib"
+    pixied_run mkdir -p "$stage_dir/bin" "$stage_dir/lib" "$stage_dir/lib/templates"
     pixied_run cp "$source_root/$deploy_bin" "$stage_dir/$deploy_bin"
-    for file in "${deploy_libs[@]}"; do
+    for file in "${deploy_libs[@]}" "${deploy_templates[@]}"; do
+        pixied_run mkdir -p -- "$stage_dir/$(dirname "$file")"
         pixied_run cp "$source_root/$file" "$stage_dir/$file"
     done
     pixied_run chmod 0755 "$stage_dir/$deploy_bin"
-    for file in "${deploy_libs[@]}"; do
+    for file in "${deploy_libs[@]}" "${deploy_templates[@]}"; do
         pixied_run chmod 0644 "$stage_dir/$file"
     done
     if [ ! -f "$stage_dir/$deploy_bin" ] || [ -L "$stage_dir/$deploy_bin" ]; then
         pixied_die "staged CLI is not a regular file: $stage_dir/$deploy_bin"
     fi
-    for file in "${deploy_libs[@]}"; do
+    for file in "${deploy_libs[@]}" "${deploy_templates[@]}"; do
         if [ ! -f "$stage_dir/$file" ] || [ -L "$stage_dir/$file" ]; then
             pixied_die "staged library is not a regular file: $stage_dir/$file"
         fi
     done
 
-    for file in "$deploy_bin" "${deploy_libs[@]}"; do
+    for file in "$deploy_bin" "${deploy_libs[@]}" "${deploy_templates[@]}"; do
         target=$destination/$file
         if [ -e "$target" ] || [ -L "$target" ]; then
             backup=$backup_dir/$file
@@ -145,7 +147,9 @@ pixied_install_deploy_source() {
     # @exitcode 0 When all destination boundaries are regular paths.
     pixied_install_validate_destination_boundaries() {
         local dir
-        for dir in "$destination" "$destination/bin" "$destination/lib"; do
+        for dir in "$destination" "$destination/bin" "$destination/lib" \
+            "$destination/lib/templates" "$destination/lib/templates/direnv" \
+            "$destination/lib/templates/devcontainer" "$destination/lib/templates/dockerfile"; do
             if [ -L "$dir" ]; then
                 pixied_die "deployment destination path is a symlink and escapes its boundary: $dir"
             fi

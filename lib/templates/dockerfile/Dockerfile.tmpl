@@ -1,0 +1,53 @@
+# Build context: the project root containing the Pixi definition.
+# The source is not copied into the image; mount it at /workspace:
+#   docker build -t my-ci -f Dockerfile .
+#   docker run --rm -v "$PWD":/workspace --user "$(id -u):$(id -g)" my-ci run-tests-command
+
+# Override the Pixi version: --build-args PIXI_VERSION=<version>
+@@PIXI_VERSION_ARG@@
+
+# -----------------------------------------------------------------------------
+# Builder stage: install the project environment
+# -----------------------------------------------------------------------------
+@@BUILDER_FROM@@
+
+ARG PIXI_ENVIRONMENT_NAME=default
+
+ENV PIXI_HOME=/opt/pixi
+ENV PIXI_ENVIRONMENT_NAME=${PIXI_ENVIRONMENT_NAME}
+
+WORKDIR /workspace
+
+# Add necessary sources for pixi install
+@@COPY_LINE@@
+
+RUN mkdir -p "$PIXI_HOME" && \
+    pixi config set --global detached-environments "$PIXI_HOME/envs" && \
+    @@INSTALL_COMMAND@@ && \
+    environment_bin=$(find "$PIXI_HOME/envs" -mindepth 4 -maxdepth 4 -type d -path "*/envs/$PIXI_ENVIRONMENT_NAME/bin" -print -quit) && \
+    : "${environment_bin:?Pixi $PIXI_ENVIRONMENT_NAME environment was not installed}" && \
+    rm -rf "$PIXI_HOME/envs/bin" && \
+    ln -s -- "$environment_bin" "$PIXI_HOME/envs/bin"
+
+# -----------------------------------------------------------------------------
+# Runtime stage: run the project as the configured non-root user
+# -----------------------------------------------------------------------------
+@@RUNNER_FROM@@
+
+ARG PIXI_ENVIRONMENT_NAME=default
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+ENV PIXI_HOME=/opt/pixi
+ENV PIXI_ENVIRONMENT_NAME=${PIXI_ENVIRONMENT_NAME}
+ENV PATH=${PIXI_HOME}/envs/bin:${PIXI_HOME}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN if ! getent group "${APP_GID}" >/dev/null; then \
+        groupadd --gid "${APP_GID}" app; \
+    fi && \
+    if ! getent passwd "${APP_UID}" >/dev/null; then \
+        useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home app; \
+    fi
+WORKDIR /workspace
+COPY --from=builder ${PIXI_HOME} ${PIXI_HOME}
+USER ${APP_UID}:${APP_GID}

@@ -107,11 +107,22 @@ pixied_fake_lease() {
 # @arg $2 string Release version to declare in bin/pixied.
 # @exitcode 0 When the source tree is created.
 pixied_make_release_source() {
-    local target=$1 version=$2
+    local target=$1 version=$2 template_category
     mkdir -p "$target/bin" "$target/lib"
     cp "$PIXIED_REPO_ROOT/install-local.sh" "$target/install-local.sh"
     cp "$PIXIED_REPO_ROOT/bin/pixied" "$target/bin/pixied"
     cp "$PIXIED_REPO_ROOT"/lib/*.sh "$target/lib/"
+    if [ -d "$PIXIED_REPO_ROOT/lib/templates" ]; then
+        # Shell globs skip dotfiles such as .envrc.tmpl, so copy with find.
+        for template_category in direnv devcontainer dockerfile; do
+            mkdir -p "$target/lib/templates/$template_category"
+            find "$PIXIED_REPO_ROOT/lib/templates/$template_category" -mindepth 1 -maxdepth 1 \
+                \( -type f -o -type l \) \( -name '*.tmpl' -o -name '*.tmpl.*' \) \
+                -exec cp -t "$target/lib/templates/$template_category" {} +
+            find "$target/lib/templates/$template_category" -mindepth 1 -maxdepth 1 \
+                -type f \( -name '*.tmpl' -o -name '*.tmpl.*' \) -exec chmod 0644 {} +
+        done
+    fi
     sed -i "s/^PIXIED_VERSION=\"[^\"]*\"$/PIXIED_VERSION=\"$version\"/" \
         "$target/bin/pixied"
     chmod 0755 "$target/install-local.sh" "$target/bin/pixied"
@@ -287,12 +298,54 @@ assert_semver() {
     grep -Fq -- '"postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postCreateCommand.sh"' \
         "$dc_json" ||
         pixied_test_fail "DevContainer does not delegate the post-create work to postCreateCommand.sh"
+    grep -Fq -- '"dockerComposeFile"' "$dc_json" ||
+        pixied_test_fail "DevContainer does not use compose.yaml"
+    grep -Fq -- '"compose.yaml"' "$dc_json" ||
+        pixied_test_fail "DevContainer does not reference compose.yaml"
+    grep -Fq -- '"compose.override.yaml"' "$dc_json" ||
+        pixied_test_fail "DevContainer does not accept compose.override.yaml"
+    grep -Fq -- '"service": "app"' "$dc_json" ||
+        pixied_test_fail "DevContainer does not select the compose app service"
     grep -Fq -- 'source=${localEnv:USER}-${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume' \
         "$dc_json" ||
         pixied_test_fail "DevContainer does not keep the Pixi directory on a per-user named volume"
+    if grep -Fq -- '"build"' "$dc_json"; then
+        pixied_test_fail "DevContainer should build through compose.yaml instead of inlining build"
+    fi
     if grep -Fq -- '"remoteEnv"' "$dc_json"; then
         pixied_test_fail "DevContainer should not override the internal PIXI_HOME in remoteEnv"
     fi
+    local dc_compose dc_override
+    dc_compose="$PIXIED_TEST_ROOT/project/.devcontainer/compose.yaml"
+    dc_override="$PIXIED_TEST_ROOT/project/.devcontainer/compose.override.yaml"
+    [ -f "$dc_compose" ] ||
+        pixied_test_fail "compose.yaml was not generated"
+    [ -f "$dc_override" ] ||
+        pixied_test_fail "compose.override.yaml was not generated"
+    grep -Fq -- 'dockerfile: .devcontainer/Dockerfile' "$dc_compose" ||
+        pixied_test_fail "compose.yaml does not build the DevContainer Dockerfile"
+    grep -Fq -- '..:/workspace:cached' "$dc_compose" ||
+        pixied_test_fail "compose.yaml does not bind-mount the workspace"
+    if grep -Fq -- 'localEnv' "$dc_compose"; then
+        pixied_test_fail "compose.yaml must not use devcontainer variables that docker compose cannot interpolate"
+    fi
+    grep -Fq -- 'command: sleep infinity' "$dc_compose" ||
+        pixied_test_fail "compose.yaml does not keep the container running"
+    if grep -Fq -- 'localEnv' "$dc_override"; then
+        pixied_test_fail "compose.override.yaml must not use devcontainer variables that docker compose cannot interpolate"
+    fi
+    grep -Fq -- 'env_file:' "$dc_override" ||
+        pixied_test_fail "compose.override.yaml does not provide the commented env_file example"
+    grep -Fq -- '"8080:8080"' "$dc_override" ||
+        pixied_test_fail "compose.override.yaml does not provide the commented ports example"
+    local dc_gitignore
+    dc_gitignore="$PIXIED_TEST_ROOT/project/.devcontainer/.gitignore"
+    [ -f "$dc_gitignore" ] ||
+        pixied_test_fail ".gitignore was not generated"
+    grep -Fqx -- '.env' "$dc_gitignore" ||
+        pixied_test_fail ".gitignore does not ignore the host-local .env"
+    grep -Fqx -- 'compose.override.yaml' "$dc_gitignore" ||
+        pixied_test_fail ".gitignore does not ignore the per-user compose.override.yaml"
     [ -x "$dc_script" ] || pixied_test_fail "postCreateCommand.sh was not generated as an executable file"
     run bash -n "$dc_script"
     assert_success
@@ -308,7 +361,7 @@ assert_semver() {
         pixied_test_fail "postCreateCommand.sh does not update .bashrc"
     grep -Fq -- 'postCreateCommand.local.sh' "$dc_script" ||
         pixied_test_fail "postCreateCommand.sh does not run the project-local post-create script"
-    for obsolete in .env .env.example .gitignore generate-env.sh entrypoint.sh; do
+    for obsolete in .env .env.example generate-env.sh entrypoint.sh; do
         [ ! -e "$PIXIED_TEST_ROOT/project/.devcontainer/$obsolete" ] ||
             pixied_test_fail "DevContainer generated obsolete file: $obsolete"
     done
@@ -562,9 +615,15 @@ PYPROJECT
         pixied_test_fail "--force did not create a .bak backup for the DevContainer Dockerfile"
     [ -f "$project/.devcontainer/devcontainer.json.bak" ] ||
         pixied_test_fail "--force did not create a .bak backup for the devcontainer.json"
+    [ -f "$project/.devcontainer/compose.yaml.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for compose.yaml"
+    [ -f "$project/.devcontainer/compose.override.yaml.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for compose.override.yaml"
+    [ -f "$project/.devcontainer/.gitignore.bak" ] ||
+        pixied_test_fail "--force did not create a .bak backup for the .gitignore"
     [ -f "$project/.devcontainer/postCreateCommand.sh.bak" ] ||
         pixied_test_fail "--force did not create a .bak backup for the post-create script"
-    for obsolete in .env.example .gitignore generate-env.sh entrypoint.sh; do
+    for obsolete in .env.example generate-env.sh entrypoint.sh; do
         [ ! -e "$project/.devcontainer/$obsolete" ] ||
             pixied_test_fail "generation created obsolete file: $obsolete"
         [ ! -e "$project/.devcontainer/$obsolete.bak" ] ||
@@ -1035,6 +1094,10 @@ PYPROJECT
     assert_equal 1.2.3 "$(pixied_version_from_source "$destination/bin/pixied")"
     [ -f "$destination/lib/release.sh" ] ||
         pixied_test_fail 'release source library was not deployed'
+    [ -f "$destination/lib/templates/devcontainer/compose.tmpl.yaml" ] ||
+        pixied_test_fail 'release source templates were not deployed'
+    [ -f "$destination/lib/templates/devcontainer/compose.override.tmpl.yaml" ] ||
+        pixied_test_fail 'release source override template was not deployed'
 }
 
 @test "NFS install deploys local payload before selecting the shared release" {

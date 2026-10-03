@@ -1,0 +1,19 @@
+# Build context: the project root.
+
+# Copy the Pixi binary from the specified Pixi version image.
+# Override the Pixi version: build.args PIXI_VERSION=<version>
+@@PIXI_VERSION_ARG@@
+
+@@PIXI_PROVIDER_FROM@@
+
+FROM mcr.microsoft.com/devcontainers/base:noble
+
+COPY --from=pixi-provider /usr/local/bin/pixi /usr/local/bin/
+
+# Isolate container environment to prevent path conflicts with host.
+VOLUME /workspace/.pixi
+
+# Install additional packages if needed.
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#         listing-additional-packages \
+#     && rm -rf /var/lib/apt/lists/*

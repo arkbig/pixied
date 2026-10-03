@@ -1,0 +1,16 @@
+{
+    "name": "Pixi project",
+    "dockerComposeFile": [
+        "compose.yaml",
+        "compose.override.yaml"
+    ],
+    "service": "app",
+    "workspaceFolder": "/workspace",
+    "mounts": [
+        // To remove the volume:
+        // 1. `docker volume ls` - Find the volume name ($USER-$DirectoryName-pixi).
+        // 2. `docker volume rm <target>` - Delete the target volume.
+        "source=${localEnv:USER}-${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume"
+    ],
+    "postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/postCreateCommand.sh"
+}

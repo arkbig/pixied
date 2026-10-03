@@ -1,0 +1,24 @@
+# Personal overrides for local development.
+# This file is merged automatically with compose.yaml by devcontainer.json.
+# It is yours: add per-user bind mounts or container tweaks here.
+# Uncomment and adjust the examples below as needed.
+services:
+  app: {}
+#     # Additional bind mounts for your machine only.
+#     volumes:
+#       # Optional: Mount .pixi/config.toml to share with the DevContainer.
+#       #       - ../.pixi/config.toml:/workspace/.pixi/config.toml
+#       # Share a host tool cache (example).
+#       # - ${HOME}/.cache/my-tool:/home/vscode/.cache/my-tool:cached
+#       # Mount another local directory.
+#       # - /path/on/host:/path/in/container:cached
+#     # Extra environment variables inside the container.
+#     environment:
+#       - MY_VAR=value
+#     env_file:
+#       - .env
+#     # Publish ports on your machine only.
+#     ports:
+#       - "8080:8080"
+#     # Run a different command inside the container.
+#     # command: sleep infinity

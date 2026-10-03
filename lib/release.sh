@@ -71,15 +71,19 @@ if ! declare -F pixied_release_version_validate >/dev/null 2>&1; then
 fi
 
 # @description Populate the canonical release payload allowlist.
-# The list contains the local installer, CLI, and every immediate lib/*.sh file.
-# Symlinks remain in the list so later validation can reject them explicitly.
+# The list contains the local installer, CLI, every immediate lib/*.sh file,
+# and every lib/templates/<category> template. Templates use a .tmpl infix
+# before the real extension (*.tmpl.{ext}); extensionless outputs use a bare
+# .tmpl suffix instead. The template categories are fixed to direnv,
+# devcontainer, and dockerfile. Symlinks remain in the list so later validation
+# can reject them explicitly.
 #
 # @arg $1 string The source tree root.
 # @set PIXIED_RELEASE_PAYLOAD_PATHS array Release-relative payload paths.
 # @exitcode 0 When the source tree has the expected layout.
 # @exitcode 1 When the source tree is missing a required directory.
 pixied_release_payload_paths() {
-    local source_root=${1:-} lib_path
+    local source_root=${1:-} lib_path template_path category
     [ -n "$source_root" ] || pixied_release_fail 'release source root is not set'
     [ -d "$source_root" ] || pixied_release_fail "release source root is not a directory: $source_root"
     [ ! -L "$source_root" ] || pixied_release_fail "release source root is a symlink: $source_root"
@@ -94,6 +98,22 @@ pixied_release_payload_paths() {
         PIXIED_RELEASE_PAYLOAD_PATHS+=("lib/$lib_path")
     done < <(find "$source_root/lib" -mindepth 1 -maxdepth 1 \
         \( -type f -o -type l \) -name '*.sh' -printf '%f\n' | sort)
+    if [ -d "$source_root/lib/templates" ]; then
+        [ ! -L "$source_root/lib/templates" ] ||
+            pixied_release_fail "release source templates directory is a symlink: $source_root/lib/templates"
+        for category in direnv devcontainer dockerfile; do
+            [ -d "$source_root/lib/templates/$category" ] ||
+                pixied_release_fail "release source template category is missing: $source_root/lib/templates/$category"
+            [ ! -L "$source_root/lib/templates/$category" ] ||
+                pixied_release_fail "release source template category is a symlink: $source_root/lib/templates/$category"
+        done
+        while IFS= read -r template_path; do
+            [ -n "$template_path" ] || continue
+            PIXIED_RELEASE_PAYLOAD_PATHS+=("lib/templates/$template_path")
+        done < <(find "$source_root/lib/templates" -mindepth 2 -maxdepth 2 \
+            \( -type f -o -type l \) \( -name '*.tmpl' -o -name '*.tmpl.*' \) \
+            -printf '%P\n' | sort)
+    fi
     [ "${#PIXIED_RELEASE_PAYLOAD_PATHS[@]}" -gt 2 ] ||
         pixied_release_fail "release source has no library payload: $source_root/lib"
 }
@@ -107,6 +127,7 @@ pixied_release_payload_paths() {
 pixied_release_expected_mode() {
     case "$1" in
     install-local.sh | bin/pixied) printf '755' ;;
+    lib/templates/*/*.tmpl | lib/templates/*/*.tmpl.*) printf '644' ;;
     lib/*.sh) printf '644' ;;
     *) pixied_release_fail "release path is not in the payload allowlist: $1" ;;
     esac
@@ -213,7 +234,10 @@ pixied_release_validate_tree() {
     while IFS= read -r entry; do
         rel=${entry#"$release_dir/"}
         case "$rel" in
-        install-local.sh | release-manifest | bin | lib | bin/pixied | lib/*.sh) ;;
+        install-local.sh | release-manifest | bin | lib | lib/templates | bin/pixied | lib/*.sh) ;;
+        lib/templates/direnv | lib/templates/devcontainer | lib/templates/dockerfile) ;;
+        lib/templates/direnv/*.tmpl | lib/templates/devcontainer/*.tmpl | lib/templates/dockerfile/*.tmpl) ;;
+        lib/templates/direnv/*.tmpl.* | lib/templates/devcontainer/*.tmpl.* | lib/templates/dockerfile/*.tmpl.*) ;;
         README.md | README.ja.md | docs | docs/*)
             [ "$tree_kind" = archive ] ||
                 pixied_release_fail "release contains an unmanaged path: $rel"
