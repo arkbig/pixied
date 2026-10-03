@@ -4,6 +4,12 @@
 | 🌐Language: | [English](./README.md) ｜ **日本語** |
 | ---------- | ------------------------------------ |
 
+> [!WARNING]
+> **Experimental / PoC**
+>
+> 現在はAIコーディング任せ（Vibe Coding）のプロトタイプです。AI生成のエラー処理やテストは存在しますが、未精査の状態です。
+> 常用レベルに達した段階でRustへ移植します。その際はAIエージェントのハーネス（制御基盤）を組み込み、しっかり手綱を取って作り直す予定です。
+
 PixiEdenは[Pixi](https://github.com/prefix-dev/pixi/)ベースの開発環境構築ツールです。コマンド名は`pixied`。
 
 PixiEdenは、WSL2などのローカル環境から、ホームディレクトリがNFS共有されている非特権(root権限なし)サーバーまで、同じ定義からPixi開発runtimeを再構築できます。

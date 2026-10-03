@@ -5,6 +5,13 @@
 > [!WARNING]
 > This document is an AI-generated translation. The original Japanese version is human-reviewed.
 
+> [!WARNING]
+> **Experimental / PoC**
+>
+> This is an experimental prototype relying on unguided AI coding ("vibe coding"). While AI-generated error handling and test cases are present, they remain completely unreviewed and unaudited.
+>
+> Once it becomes usable enough for my personal daily workflow, I plan to rewrite it in Rust. During that rewrite, I will implement an AI agent harness (a control framework) to strictly govern the development process and rebuild it reliably.
+
 PixiEden is a [Pixi](https://github.com/prefix-dev/pixi/)-based development environment provisioning tool. Its command name is `pixied`.
 
 PixiEden can rebuild a Pixi development runtime from the same definition, from local environments such as WSL2 to unprivileged (without root privileges) servers whose home directories are shared over NFS.
