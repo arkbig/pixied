@@ -97,7 +97,7 @@ pixied_release_payload_paths() {
         [ -n "$lib_path" ] || continue
         PIXIED_RELEASE_PAYLOAD_PATHS+=("lib/$lib_path")
     done < <(find "$source_root/lib" -mindepth 1 -maxdepth 1 \
-        \( -type f -o -type l \) -name '*.sh' -printf '%f\n' | sort)
+        \( -type f -o -type l \) -name '*.sh' -printf '%f\n' | LC_ALL=C sort)
     if [ -d "$source_root/lib/templates" ]; then
         [ ! -L "$source_root/lib/templates" ] ||
             pixied_release_fail "release source templates directory is a symlink: $source_root/lib/templates"
@@ -112,7 +112,7 @@ pixied_release_payload_paths() {
             PIXIED_RELEASE_PAYLOAD_PATHS+=("lib/templates/$template_path")
         done < <(find "$source_root/lib/templates" -mindepth 2 -maxdepth 2 \
             \( -type f -o -type l \) \( -name '*.tmpl' -o -name '*.tmpl.*' \) \
-            -printf '%P\n' | sort)
+            -printf '%P\n' | LC_ALL=C sort)
     fi
     [ "${#PIXIED_RELEASE_PAYLOAD_PATHS[@]}" -gt 2 ] ||
         pixied_release_fail "release source has no library payload: $source_root/lib"

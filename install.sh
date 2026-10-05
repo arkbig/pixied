@@ -103,6 +103,7 @@ verify_release_manifest() {
     [ -f "$root/lib/common.sh" ] || fail 'release archive is missing pixied/lib/common.sh'
     [ -f "$root/lib/release.sh" ] || fail 'release archive is missing pixied/lib/release.sh'
     if ! (
+        export LC_ALL=C
         . "$root/lib/common.sh"
         . "$root/lib/release.sh"
         pixied_release_validate_tree "$root" "$root/release-manifest" archive
