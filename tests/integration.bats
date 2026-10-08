@@ -1123,6 +1123,9 @@ PYPROJECT
         bash "$source/install-local.sh" --home-mode nfs --local-home "$local_home" \
         --machine-id nfs-install --yes
     assert_success
+    assert_output --partial 'are ready (pixied 1.2.3)'
+    assert_output --partial 'Shared release 1.2.3 is current for this host'
+    assert_output --partial "$account_home/.local/bin/pixied hook bash"
     [ "$(sed -n 's/^version=//p' "$state/pixied/release-store/current")" = 1.2.3 ] ||
         pixied_test_fail 'initial NFS install did not select its release'
     assert_equal 1.2.3 "$(pixied_version_from_source "$data/pixied/bin/pixied")"
@@ -1705,11 +1708,12 @@ MKDIR
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
     assert_output --partial 'Runtime hook and dedicated Pixi environment are ready'
+    assert_output --partial "are ready (pixied $(pixied_version_from_source "$data/pixied/bin/pixied")"
     assert_output --partial 'Option A (Start now):'
     assert_output --partial "pixied shell"
     assert_output --partial 'Option B (Automatic - Recommended):'
     assert_output --partial "Add to ~/.bashrc, then restart your terminal:"
-    assert_output --partial "$data/pixied/bin/pixied hook bash"
+    assert_output --partial "$home/.local/bin/pixied hook bash"
     [[ "$output" != *'Phase 5'* ]] || pixied_test_fail "success output contains an obsolete phase number"
     [ -f "$data/pixied/bin/pixied" ] || pixied_test_fail "deployed CLI is missing"
     [ -f "$data/pixied/lib/common.sh" ] || pixied_test_fail "deployed common library is missing"
