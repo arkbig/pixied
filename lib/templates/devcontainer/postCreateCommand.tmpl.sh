@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
 # Post-create command script for the DevContainer.
+#
+# If you want to change the Pixi environment, set the DEVCONTAINER_PIXI_ENV environment variable.
 
 set -Eeuo pipefail
 umask 022
@@ -16,11 +18,16 @@ else
 fi
 
 install_pixi() {
+    local pixi_env="${DEVCONTAINER_PIXI_ENV:-default}"
+    local env_args=()
+    if [ "$pixi_env" != "default" ]; then
+        env_args=(-e "$pixi_env")
+    fi
     local pixi_shell_hook
-    pixi_shell_hook="eval \"\$(pixi shell-hook --manifest-path $manifest_path 2>/dev/null)\""
+    pixi_shell_hook="eval \"\$(pixi shell-hook ${env_args[*]} --manifest-path $manifest_path 2>/dev/null)\""
 
     sudo chown -R vscode:vscode "$workspace_dir/.pixi"
-    pixi install
+    pixi install "${env_args[@]}"
 
     touch "$HOME/.bashrc"
     if ! grep -Fqx "$pixi_shell_hook" "$HOME/.bashrc"; then
