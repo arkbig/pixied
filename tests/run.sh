@@ -39,7 +39,7 @@ while [ "$#" -gt 0 ]; do
         ;;
     all)
         if [ "$suite_selected" -eq 1 ]; then
-            printf 'ERROR: choose either generate or all, not both.\n' >&2
+            printf 'ERROR: choose only one test suite.\n' >&2
             exit 2
         fi
         test_suite=all
@@ -47,10 +47,18 @@ while [ "$#" -gt 0 ]; do
         ;;
     generate)
         if [ "$suite_selected" -eq 1 ]; then
-            printf 'ERROR: choose either generate or all, not both.\n' >&2
+            printf 'ERROR: choose only one test suite.\n' >&2
             exit 2
         fi
         test_suite=generate
+        suite_selected=1
+        ;;
+    expose)
+        if [ "$suite_selected" -eq 1 ]; then
+            printf 'ERROR: choose only one test suite.\n' >&2
+            exit 2
+        fi
+        test_suite=expose
         suite_selected=1
         ;;
     --filter)
@@ -85,15 +93,22 @@ fi
 
 case "$test_suite" in
 integration)
-    test_files=("$PIXIED_ROOT/tests/integration.bats")
+    test_files=(
+        "$PIXIED_ROOT/tests/integration.bats"
+        "$PIXIED_ROOT/tests/expose.bats"
+    )
     ;;
 generate)
     test_files=("$PIXIED_ROOT/tests/generate-docker.bats")
+    ;;
+expose)
+    test_files=("$PIXIED_ROOT/tests/expose.bats")
     ;;
 all)
     test_files=(
         "$PIXIED_ROOT/tests/integration.bats"
         "$PIXIED_ROOT/tests/generate-docker.bats"
+        "$PIXIED_ROOT/tests/expose.bats"
     )
     ;;
 esac

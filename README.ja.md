@@ -123,6 +123,8 @@ pixied hook <bash|zsh>       シェル初期化コードを出力
 pixied install               環境をインストールまたは修復
 pixied uninstall             PixiEden管理対象を整理
 pixied generate <format>     プロジェクト連携ファイルを生成
+pixied expose [options]      Pixi Global commandを指定先へ公開
+pixied unexpose <path>       変更されていない公開物を削除
 pixied prune [options]       古いshared NFS Releaseを整理
 pixied help                  ヘルプを表示
 pixied version               バージョン表示
@@ -140,6 +142,44 @@ pixied generate dockerfile
 
 `direnv`はプロジェクトディレクトリに入ったときだけプロジェクトPixi環境を有効化する。DevContainerとDockerfileは、プロジェクトの`pixi.toml`を基にコンテナ内へ開発環境を構築する(ボリュームマウント前提)。
 
+## Global commandの公開
+
+`pixied expose`は専用Pixi Global環境のcommandを公開する。
+先にpackageをinstallする。`--docker`も
+`--version-arg`／`--version-format`も指定しない場合はシンボリックリンクを作成する。
+
+```bash
+pixied run pixi global install docker-buildx
+pixied expose docker-buildx --docker
+docker buildx version
+pixied unexpose "$(realpath -m -- "${DOCKER_CONFIG:-$HOME/.docker}")/cli-plugins/docker-buildx"
+```
+
+`--docker`はDocker CLIプラグイン用のラッパーを作成する。`--version-arg`と`--version-format`は不要で、併用もできない。
+例えば`docker buildx version`には、Pixiにinstallされたバージョンを返す。
+Dockerはプラグインを認識する際に、提供元・説明・バージョンなどのプラグイン情報（metadata）も問い合わせる。ラッパーはその情報のうちバージョンだけをPixiのinstall済みバージョンに差し替え、他の情報は保持する。
+通常のプラグイン操作は元のcommandにそのまま委譲する。
+BuildxとComposeの通常のバージョン表示、およびComposeの`--short`と`--format json`に対応する。
+`--to`を省略すると、公開先は`$DOCKER_CONFIG/cli-plugins/docker-buildx`、`DOCKER_CONFIG`が未設定または空なら`$HOME/.docker/cli-plugins/docker-buildx`となる。
+別の場所へ公開する場合は`--to`に絶対パスを指定する。明示的に指定した場合、その親ディレクトリは事前に作成する必要がある。
+Dockerの`--config` optionを使う場合は、その設定ディレクトリに合わせて`--to`を指定する。
+
+環境名と依存package名には`pixied run pixi global list --json`の実際の値を指定する。
+公開command名と異なる場合がある。
+`--environment`の既定値はcommand名、`--package`の既定値は環境名。
+
+他のツールでは`--to`が必須で、親ディレクトリを事前に作成する。
+単一引数のバージョン問い合わせと`{version}`を含む出力形式を指定できる。
+
+```bash
+pixied expose my-command --to "$HOME/.local/bin/my-command" \
+  --environment my-env --package my-package \
+  --version-arg --version --version-format 'my-command {version}'
+```
+
+`unexpose`は管理記録と一致する未変更の公開物だけを削除し、Pixi packageは削除しない。`pixied uninstall`は公開物を削除しないため、その前に`unexpose`する。
+NFS modeでは各hostのlocal Pixi pathを参照するので、公開先もmachine-localにする。
+
 ## NFS共有ホームでの注意
 
 interactiveな`nfs`installでは、選択したlocal homeが未作成なら、明示確認後にPixiEdenがdeployment前に作成し、その後に存在、owner、書込み権限、account homeとの分離、local filesystem条件をvalidationする。`--yes`または`curl | bash`のようなnon-TTY installではpromptも作成も行わず、install前の作成が必要である。reinstallでは作成確認より前に保存済みidentityを検証する。
@@ -156,7 +196,7 @@ pixied uninstall
 
 ## 動作要件
 
-- `bash`、`curl`または`wget`、`tar`を利用できるUbuntuまたは互換`Linux`。
+- `bash`、`awk`、`curl`または`wget`、`tar`を利用できるUbuntuまたは互換`Linux`。
 
 ## ドキュメント案内
 

@@ -34,6 +34,7 @@ Run the integration suite with:
 ```bash
 tests/run.sh
 tests/run.sh generate
+tests/run.sh expose
 tests/run.sh all
 ```
 
@@ -87,6 +88,8 @@ Resolved paths such as `PIXIED_DATA_DIR`, `PIXIED_CONFIG_DIR`, and `PIXIED_STATE
 | `lib/session.sh` | Child commands and interactive Bash startup |
 | `lib/uninstall.sh` | Ownership validation, quarantine, and cleanup |
 | `lib/generate.sh` | Project integration file generation |
+| `lib/expose.sh` | Pixi Global exposures and safe removal |
+| `lib/expose-json.sh` | JSON validation and transformation for self-contained exposure wrappers |
 
 ## Release archive verification
 

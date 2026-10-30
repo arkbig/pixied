@@ -9,6 +9,10 @@ case "${1:-}" in
     printf 'pixi 0.0.0-fake\n'
     ;;
 global)
+    if [ "${2:-}" = list ] && [ "${3:-}" = --json ]; then
+        cat "${PIXI_HOME:?}/fake-global.json"
+        exit
+    fi
     [ "${2:-}" = install ] || exit 2
     shift 2
     mkdir -p "${PIXI_HOME:?}/bin"

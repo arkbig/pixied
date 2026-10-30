@@ -133,6 +133,8 @@ pixied hook <bash|zsh>       Print shell initialization code
 pixied install               Install or repair the environment
 pixied uninstall             Clean up PixiEden-managed resources
 pixied generate <format>     Generate project integration files
+pixied expose [options]      Expose a Pixi Global command
+pixied unexpose <path>       Remove an unchanged exposure
 pixied prune [options]       Remove old shared NFS Releases
 pixied help                  Show help
 pixied version               Show the version
@@ -149,6 +151,36 @@ pixied generate dockerfile
 ```
 
 `direnv` enables the project Pixi environment only when entering the project directory. DevContainer and Dockerfile build a development environment inside the container based on the project's `pixi.toml` (assuming a volume mount).
+
+## Exposing Global Commands
+
+`pixied expose` makes a command installed in the dedicated Pixi Global environment available elsewhere. Install the package first. If neither `--docker` nor the version options are
+specified, it creates a symlink.
+
+```bash
+pixied run pixi global install docker-buildx
+pixied expose docker-buildx --docker
+docker buildx version
+pixied unexpose "$(realpath -m -- "${DOCKER_CONFIG:-$HOME/.docker}")/cli-plugins/docker-buildx"
+```
+
+`--docker` creates a wrapper for a Docker CLI plugin. It does not need `--version-arg` or `--version-format`, and cannot be combined with them. For example, `docker buildx version` reports the version installed by Pixi. Docker also asks plugins for information (metadata) such as their vendor, description, and version when discovering them. The wrapper replaces only the version in that information and preserves the other fields. Normal plugin commands are delegated unchanged. The wrapper supports the standard Buildx and Compose version displays, including Compose's `--short` and `--format json`.
+Without `--to`, the destination is `$DOCKER_CONFIG/cli-plugins/docker-buildx`, or `$HOME/.docker/cli-plugins/docker-buildx` when `DOCKER_CONFIG` is unset or empty. The directory is created if needed. To use another location, specify an absolute destination with `--to`; its parent directory must already exist.
+When using Docker's `--config` option, specify a destination under that config directory with `--to`.
+
+Use the actual environment and dependency names from `pixied run pixi global list --json`; they may differ from the exposed command name. `--environment` defaults to the command name, and `--package` defaults to the environment name.
+
+For other tools, `--to` is required and its parent directory must already exist.
+Replace an exact single-argument version query using a format containing `{version}`:
+
+```bash
+pixied expose my-command --to "$HOME/.local/bin/my-command" \
+  --environment my-env --package my-package \
+  --version-arg --version --version-format 'my-command {version}'
+```
+
+Existing destinations and exposure records are never overwritten.
+`unexpose` removes only an unchanged exposure with its matching ownership record; it does not uninstall the Pixi package. Remove exposures before `pixied uninstall`, which does not remove them. In NFS mode use a machine-local destination: exposures refer to that machine's local Pixi paths.
 
 ## Notes on NFS-Shared Homes
 
@@ -168,7 +200,7 @@ Finally, manually remove the PixiEden hook block from the added shell configurat
 
 ## Requirements
 
-- Ubuntu or compatible `Linux` with `bash`, `curl` or `wget`, and `tar` available.
+- Ubuntu or compatible `Linux` with `bash`, `awk`, `curl` or `wget`, and `tar` available.
 
 ## Documentation
 

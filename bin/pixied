@@ -45,6 +45,10 @@ readonly PIXIED_ROOT
 . "$PIXIED_ROOT/lib/hook.sh"
 # shellcheck source=lib/generate.sh
 . "$PIXIED_ROOT/lib/generate.sh"
+# shellcheck source=lib/expose-json.sh
+. "$PIXIED_ROOT/lib/expose-json.sh"
+# shellcheck source=lib/expose.sh
+. "$PIXIED_ROOT/lib/expose.sh"
 # shellcheck source=lib/uninstall.sh
 . "$PIXIED_ROOT/lib/uninstall.sh"
 pixied_enable_strict_mode
@@ -63,6 +67,8 @@ Commands:
     hook <shell> [options] Print shell initialization code.
     generate <format> [options] Generate a project integration file.
                            Formats: direnv, devcontainer, dockerfile.
+    expose [options]       Expose a Pixi Global command at another path.
+    unexpose <path>        Remove an unchanged PixiEden exposure.
     uninstall [options]    Remove the PixiEden installation.
     prune [options]        Remove unused shared NFS releases.
     help                   Show this help.
@@ -773,6 +779,14 @@ pixied_main() {
     generate)
         shift
         pixied_generate "$@"
+        ;;
+    expose)
+        shift
+        pixied_expose "$@"
+        ;;
+    unexpose)
+        shift
+        pixied_unexpose "$@"
         ;;
     __runtime-state)
         [ "$#" -eq 1 ] || pixied_die "internal runtime state command takes no arguments" "$PIXIED_EXIT_USAGE"
