@@ -1,0 +1,23 @@
+# Build context: the project root. The generated Dockerfiles copy only the
+# Pixi inputs (pixi.toml / pyproject.toml, pixi.lock, README*, LICENSE*), so
+# host-local state, caches, and secrets are excluded here.
+
+# Pixi and direnv working state.
+.pixi/
+.venv/
+.direnv/
+
+# Host-local secret files.
+.envrc
+.env
+.env.*
+!.env.example
+
+# Version control and editor noise.
+.git/
+
+# Common caches and build outputs.
+__pycache__/
+*.pyc
+node_modules/
+dist/

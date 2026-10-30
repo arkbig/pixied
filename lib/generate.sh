@@ -489,6 +489,17 @@ pixied_generate_dockerfile_content() {
     printf '%s' "$content"
 }
 
+# @description Return the build-context .dockerignore content.
+# Both `generate dockerfile` and `generate devcontainer` use the project root
+# as the build context, so a single shared template serves both formats. The
+# content never excludes the Pixi inputs that the generated Dockerfiles copy.
+#
+# @stdout The generated .dockerignore content.
+# @exitcode 0 Always.
+pixied_generate_dockerignore_content() {
+    pixied_generate_template_read dockerfile/.dockerignore.tmpl
+}
+
 # @description Return the simple Dev Container Dockerfile content.
 # The image provides the pinned Pixi binary and isolates detached environments
 # from the host. The project Pixi directory is declared as a volume so it never
@@ -566,6 +577,34 @@ pixied_generate_devcontainer_gitignore_content() {
 # @exitcode 0 Always.
 pixied_generate_devcontainer_post_create_content() {
     pixied_generate_template_read devcontainer/postCreateCommand.tmpl.sh
+}
+
+# @description Prepare the build-context .dockerignore for generation.
+# The generated Dockerfiles build from the project root, so the ignore file
+# always targets the root. An existing .dockerignore with different content is
+# refused in normal mode; in force mode it goes through the commit step, which
+# backs it up as .dockerignore.bak. Up-to-date content is committed unchanged.
+# A non-regular existing file is always refused.
+#
+# @arg $1 integer Enable force mode (1) or not (0).
+# @arg $2 string The project root used as the build context.
+# @stdout The temporary file path to commit.
+# @exitcode 0 When the temporary file is ready.
+# @exitcode 1 When the target is unsafe or generation fails.
+pixied_generate_dockerignore_temp() {
+    local force=$1 root=$2 target content existing
+    target="$root/.dockerignore"
+    content=$(pixied_generate_dockerignore_content)
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        if [ ! -f "$target" ] || [ -L "$target" ]; then
+            pixied_die "refusing to replace a non-regular .dockerignore: $target"
+        fi
+        existing=$(pixied_run cat -- "$target")
+        if [ "$existing" != "$content" ] && [ "$force" -eq 0 ]; then
+            pixied_die "refusing to replace the existing .dockerignore: $target; move it aside and rerun, or use --force to back it up as $target.bak"
+        fi
+    fi
+    pixied_generate_make_temp "$target" "$content" 0644
 }
 
 # @description Check that a generated output path is not already present.
@@ -725,8 +764,10 @@ pixied_generate_direnv() {
 }
 
 # @description Generate the CI Dockerfile.
-# The image is multi-stage and never copies the project source. Existing files
-# are refused unless --force backs them up first.
+# The image is multi-stage and never copies the project source. The root
+# .dockerignore is generated alongside the Dockerfile. An existing
+# .dockerignore with different content is refused unless --force backs it up
+# first; other existing files are equally refused unless --force backs them up.
 #
 # @arg $1 integer Enable force mode (1) or not (0).
 # @arg $2 string The project root.
@@ -739,7 +780,8 @@ pixied_generate_direnv() {
 pixied_generate_dockerfile() {
     local force=$1 root=$2 pixi_version=$3 definition_name=$4
     local definition_exists=$5 lock_exists=$6
-    local target="$root/Dockerfile" content temp
+    local target="$root/Dockerfile" dockerignore="$root/.dockerignore"
+    local content temp dockerignore_temp
     if [ "$definition_exists" -eq 0 ]; then
         pixied_die "pixied generate dockerfile requires pixi.toml or pyproject.toml; lockfile-only and manifest-free projects are supported only by generate devcontainer" \
             "$PIXIED_EXIT_FAILURE"
@@ -749,18 +791,25 @@ pixied_generate_dockerfile() {
     fi
     content=$(pixied_generate_dockerfile_content "$pixi_version" "$definition_name" "$lock_exists")
     temp=$(pixied_generate_make_temp "$target" "$content" 0644)
-    pixied_generate_commit_files "$force" "$target" "$temp"
+    dockerignore_temp=$(pixied_generate_dockerignore_temp "$force" "$root")
+    pixied_generate_commit_files "$force" \
+        "$target" "$temp" \
+        "$dockerignore" "$dockerignore_temp"
     pixied_success "Generated $target"
+    pixied_success "Generated $dockerignore"
 }
 
 # @description Generate the Dev Container files.
 # Writes Dockerfile, devcontainer.json, compose.yaml, compose.override.yaml,
-# .gitignore, and the post-create script into .devcontainer. The container is
-# built through compose so per-user mounts belong in compose.override.yaml,
-# which the generated .gitignore keeps outside version control along with the
-# host-local .env. The post-create script is executable and is never confused
-# with the optional project-local postCreateCommand.local.sh, which is left
-# untouched.
+# .gitignore, and the post-create script into .devcontainer, plus a root
+# .dockerignore because compose builds the container from the project root.
+# The root .dockerignore is shared with `generate dockerfile` and refuses an
+# existing file with different content unless --force backs it up. The
+# container is built through compose so per-user mounts belong in
+# compose.override.yaml, which the generated .gitignore keeps outside version
+# control along with the host-local .env. The post-create script is executable
+# and is never confused with the optional project-local
+# postCreateCommand.local.sh, which is left untouched.
 #
 # @arg $1 integer Enable force mode (1) or not (0).
 # @arg $2 string The project root.
@@ -773,8 +822,10 @@ pixied_generate_devcontainer() {
     local dockerfile="$dir/Dockerfile" json="$dir/devcontainer.json"
     local compose="$dir/compose.yaml" override="$dir/compose.override.yaml"
     local gitignore="$dir/.gitignore" post_create="$dir/postCreateCommand.sh"
+    local dockerignore="$root/.dockerignore"
     local content
     local df_temp json_temp compose_temp override_temp gitignore_temp script_temp
+    local dockerignore_temp
     pixied_run mkdir -p -- "$dir"
     if [ "$force" -eq 0 ]; then
         pixied_generate_require_new_path "$dockerfile"
@@ -784,6 +835,7 @@ pixied_generate_devcontainer() {
         pixied_generate_require_new_path "$gitignore"
         pixied_generate_require_new_path "$post_create"
     fi
+    dockerignore_temp=$(pixied_generate_dockerignore_temp "$force" "$root")
     content=$(pixied_generate_devcontainer_dockerfile_content "$pixi_version")
     df_temp=$(pixied_generate_make_temp "$dockerfile" "$content" 0644)
     content=$(pixied_generate_devcontainer_json_content)
@@ -802,7 +854,8 @@ pixied_generate_devcontainer() {
         "$compose" "$compose_temp" \
         "$override" "$override_temp" \
         "$gitignore" "$gitignore_temp" \
-        "$post_create" "$script_temp"
+        "$post_create" "$script_temp" \
+        "$dockerignore" "$dockerignore_temp"
     pixied_success "Generated files in $dir:"
     pixied_success "  ${dockerfile##*/}"
     pixied_success "  ${json##*/}"
@@ -810,4 +863,5 @@ pixied_generate_devcontainer() {
     pixied_success "  ${override##*/}"
     pixied_success "  ${gitignore##*/}"
     pixied_success "  ${post_create##*/}"
+    pixied_success "Generated $dockerignore"
 }

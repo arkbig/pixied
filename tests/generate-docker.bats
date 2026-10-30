@@ -136,6 +136,8 @@ PYPROJECT
         pixied_test_fail "compose.override.yaml was not generated"
     [ -f "$project/.devcontainer/.gitignore" ] ||
         pixied_test_fail ".gitignore was not generated"
+    [ -f "$project/.dockerignore" ] ||
+        pixied_test_fail "root .dockerignore was not generated"
     [ -x "$project/.devcontainer/postCreateCommand.sh" ] ||
         pixied_test_fail "DevContainer did not generate an executable post-create script"
     grep -Fq -- 'VOLUME /workspace/.pixi' "$project/.devcontainer/Dockerfile" ||
