@@ -57,6 +57,24 @@ if [ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/pixied" ]; then
 fi
 ```
 
+The global runtime puts its managed bin directories before the account and local
+`~/.local/bin` directories. A project Pixi environment can still take priority
+when activated. If `~/.profile` sources `~/.bashrc` and then prepends
+`$HOME/.local/bin`, change that existing PATH addition to avoid overriding the
+active runtime (and keep it working when the hook is inactive):
+
+```bash
+if [ -z "${PIXIED_RUNTIME_HOOK_ACTIVE:-}" ] && [ -d "$HOME/.local/bin" ]; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+```
+
+In NFS mode the hook changes `HOME` to the machine-local home, so an unguarded
+addition after the hook would prepend that home's bin directory. Shell startup
+files can otherwise change PATH after activation; adjust any such additions as
+needed. After updating an existing installation, run `pixied install` to
+regenerate the runtime hook, then restart or re-attach the runtime.
+
 Opening a new terminal or SSH session enables the dedicated runtime. Run `pixied shell` to start an interactive Bash shell in it.
 
 When using it with an NFS-shared home, use a machine-local directory that you can create and own. In an interactive install, PixiEden reports a missing directory and can create the selected path only after you confirm it, before deployment. With `--yes`, or when standard input or output is not a TTY such as a `curl | bash` install, it never prompts or creates the directory, so create it in advance.

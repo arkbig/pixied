@@ -55,6 +55,23 @@ if [ -x "${XDG_BIN_HOME:-$HOME/.local/bin}/pixied" ]; then
 fi
 ```
 
+グローバルruntimeでは、pixied管理のbinディレクトリがaccount側とlocal側の
+`~/.local/bin`より優先される。プロジェクトPixi環境を有効にした場合は、その環境を
+さらに優先できる。`~/.profile`が`~/.bashrc`を読み込んだ後に
+`$HOME/.local/bin`をPATHの先頭へ追加する場合は、既存の追加処理を次のように変更し、
+runtime有効時の優先順位を維持する（hookが無効なときは従来どおり追加する）。
+
+```bash
+if [ -z "${PIXIED_RUNTIME_HOOK_ACTIVE:-}" ] && [ -d "$HOME/.local/bin" ]; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+```
+
+NFS modeではhookが`HOME`をマシンローカルなhomeへ変更するため、hookの後に無条件で
+追加すると、そのhomeのbinが先頭になる。ほかのシェル起動ファイルでも有効化後にPATHを
+変更する場合は、必要に応じて同様に調整する。既存環境の更新後は`pixied install`で
+runtime hookを再生成し、runtimeを再起動または再接続する。
+
 新しいターミナルやSSHセッションを開くと専用runtimeが有効になる。`pixied shell`を実行すると、そのruntimeで対話Bashを開始する。
 
 NFS共有ホームで使う場合は、マシンローカルなディレクトリを使う。未作成の選択パスなら表示し利用者が確認した後、PixiEdenが作成します。`--yes`、または`curl | bash`のようにstdin/stdoutがTTYでないインストールでは確認も作成も行わないため、事前に作成しておく必要があります。

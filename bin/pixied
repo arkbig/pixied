@@ -671,6 +671,11 @@ Option B (Automatic - Recommended):
     if [ -x $body_literal ]; then
         eval "\$($body_literal hook bash)"
     fi
+  If ~/.profile prepends ~/.local/bin after sourcing ~/.bashrc, guard its
+  existing PATH addition so it does not override the active PixiEden runtime:
+    if [ -z "\${PIXIED_RUNTIME_HOOK_ACTIVE:-}" ] && [ -d "\$HOME/.local/bin" ]; then
+        PATH="\$HOME/.local/bin:\$PATH"
+    fi
   For zsh, add the equivalent block to ~/.zshrc and use hook zsh.
 EOF
 }
@@ -696,6 +701,38 @@ pixied_uninstall() {
     pixied_uninstall_run "$@"
 }
 
+# @description Route active NFS management commands through the shared launcher.
+# The runtime PATH prefers the local payload, but release management must use
+# the shared dispatcher rather than an older machine-local payload.
+#
+# @arg $@ string The command name and its arguments.
+# @exitcode 0 When dispatch is not required.
+# @exitcode 1 When runtime state or the launcher cannot be verified.
+pixied_dispatch_active_nfs_management() {
+    local launcher
+    [ "${PIXIED_RUNTIME_HOOK_ACTIVE:-0}" = 1 ] || return 0
+    [ "${PIXIED_HOME_MODE:-}" = nfs ] || return 0
+    [ -z "${PIXIED_NFS_DISPATCH_ACTIVE:-}" ] || return 0
+    [ "$PIXIED_BIN_DIR" = "${PIXIED_DATA_DIR:-}/bin" ] || return 0
+    case "${1:-}" in
+    install | uninstall | prune | version | --version | help | -h | --help) ;;
+    *) return 0 ;;
+    esac
+
+    pixied_state_bootstrap_active_runtime
+    [ "$PIXIED_ACTIVE_RUNTIME" = 1 ] || return 0
+    [ "${PIXIED_STATE[home_mode]}" = nfs ] || return 0
+    [ "$PIXIED_BIN_DIR" = "$PIXIED_DATA_DIR/bin" ] || return 0
+    pixied_state_has launcher_hash || pixied_die "runtime launcher hash is missing"
+    launcher="$PIXIED_COMMAND_BIN/pixied"
+    [ "${PIXIED_STATE[launcher_path]:-}" = "$launcher" ] ||
+        pixied_die "runtime launcher path does not match the managed command directory"
+    pixied_validate_owned_path "$launcher" "${PIXIED_STATE[launcher_hash]}"
+    [ -x "$launcher" ] || pixied_die "runtime launcher is not executable: $launcher"
+    export PIXIED_NFS_DISPATCH_ACTIVE=1
+    exec "$launcher" "$@"
+}
+
 # @description The main entry point of the pixied command.
 # Interprets the first argument as a command name and dispatches to the
 # matching handler.
@@ -712,6 +749,7 @@ pixied_uninstall() {
 # @see pixied_usage
 pixied_main() {
     local command_name=${1:-}
+    pixied_dispatch_active_nfs_management "$@"
     case "$command_name" in
     "")
         pixied_shell

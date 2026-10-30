@@ -1762,6 +1762,8 @@ MKDIR
     assert_output --partial 'Option B (Automatic - Recommended):'
     assert_output --partial "Add to ~/.bashrc, then restart your terminal:"
     assert_output --partial "$home/.local/bin/pixied hook bash"
+    assert_output --partial 'If ~/.profile prepends ~/.local/bin after sourcing ~/.bashrc'
+    assert_output --partial 'if [ -z "${PIXIED_RUNTIME_HOOK_ACTIVE:-}" ] && [ -d "$HOME/.local/bin" ]; then'
     [[ "$output" != *'Phase 5'* ]] || pixied_test_fail "success output contains an obsolete phase number"
     [ -f "$data/pixied/bin/pixied" ] || pixied_test_fail "deployed CLI is missing"
     [ -f "$data/pixied/lib/common.sh" ] || pixied_test_fail "deployed common library is missing"
@@ -2418,7 +2420,7 @@ CURL
         bash "$PIXIED_REPO_ROOT/install-local.sh"
     assert_success
 
-    printf 'printf "direct-shell-home=%%s\\n" "$HOME"\n' >"$home/.bashrc"
+    printf 'printf "direct-shell-home=%%s\\ndirect-shell-path=%%s\\n" "$HOME" "$PATH"\n' >"$home/.bashrc"
 
     run env HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PATH="$fake_bin:/usr/bin:/bin" \
@@ -2428,6 +2430,7 @@ CURL
     ' "$data"
     assert_success
     assert_output --partial "direct-shell-home=$home"
+    assert_output --partial "direct-shell-path=$data/pixied/bin:$data/pixied/pixi/bin:$home/.local/bin:$fake_bin:/usr/bin:/bin"
     if command grep -Eq -- '^(systemctl|loginctl|sudo) ' "$log"; then
         pixied_test_fail "shell invoked a host service command"
     fi
@@ -2524,10 +2527,112 @@ CURL
     assert_output --partial "cache=$data/pixied/pixi/cache"
     assert_output --partial 'no_update=1'
     assert_output --partial 'active=1'
-    assert_output --partial "pixied=$home/.local/bin/pixied"
+    assert_output --partial "pixied=$data/pixied/bin/pixied"
     assert_output --partial 'pixi_bin_count=1'
     [ "$HOME" != "$home" ] || pixied_test_fail "test shell HOME was changed"
     [ ! -e "$home/.cache" ] || pixied_test_fail "runtime hook created a host cache"
+}
+
+@test "managed bins precede user bins and deduplicate PATH in local and NFS runtimes" {
+    local mode home local_home data config state pixi_home cli inherited expected shell
+    for mode in local nfs; do
+        home="$PIXIED_TEST_ROOT/path-$mode-home"
+        local_home="$home"
+        [ "$mode" != nfs ] || local_home="$PIXIED_TEST_ROOT/path-$mode-local"
+        data="$PIXIED_TEST_ROOT/path-$mode-data"
+        config="$PIXIED_TEST_ROOT/path-$mode-config"
+        state="$PIXIED_TEST_ROOT/path-$mode-state"
+        pixi_home="$data/pixied/pixi"
+        [ "$mode" != nfs ] || pixi_home="$local_home/.local/share/pixied/pixi"
+        cli="$data/pixied/bin/pixied"
+        mkdir -p "$home/.local/bin" "$local_home/.local/bin"
+        printf '#!/usr/bin/env bash\nexit 1\n' >"$home/.local/bin/direnv"
+        chmod +x "$home/.local/bin/direnv"
+        if [ "$mode" = nfs ]; then
+            printf '#!/usr/bin/env bash\nexit 1\n' >"$local_home/.local/bin/direnv"
+            chmod +x "$local_home/.local/bin/direnv"
+        fi
+
+        run env -i PATH="/usr/bin:/bin" HOME="$home" XDG_DATA_HOME="$data" \
+            XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="path-$mode" \
+            PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+            bash "$PIXIED_REPO_ROOT/install-local.sh" --yes \
+            --home-mode "$mode" --local-home "$local_home"
+        assert_success
+
+        inherited="$home/.local/bin:$local_home/.local/bin:$pixi_home/bin:$data/pixied/bin:/usr/bin:/bin:/usr/bin"
+        expected="$data/pixied/bin:$pixi_home/bin:$home/.local/bin"
+        [ "$mode" != nfs ] || expected="$expected:$local_home/.local/bin"
+        expected="$expected:/usr/bin:/bin"
+
+        for shell in bash zsh; do
+            if [ "$shell" = zsh ] && ! command -v zsh >/dev/null 2>&1; then
+                continue
+            fi
+            run env -i PATH="$inherited" HOME="$home" XDG_DATA_HOME="$data" \
+                XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="path-$mode" \
+                "$shell" -c 'eval "$(bash "$1" hook "$2")"; printf "path=%s\npixi=%s\ndirenv=%s\n" "$PATH" "$(command -v pixi)" "$(command -v direnv)"' \
+                "$shell" "$cli" "$shell"
+            assert_success
+            assert_equal "$(printf 'path=%s\npixi=%s\ndirenv=%s' \
+                "$expected" "$data/pixied/bin/pixi" "$pixi_home/bin/direnv")" "$output"
+        done
+
+        run env -i PATH="$inherited" HOME="$home" XDG_DATA_HOME="$data" \
+            XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="path-$mode" \
+            bash "$cli" run bash -c \
+            'printf "path=%s\npixi=%s\ndirenv=%s\n" "$PATH" "$(command -v pixi)" "$(command -v direnv)"'
+        assert_success
+        assert_equal "$(printf 'path=%s\npixi=%s\ndirenv=%s' \
+            "$expected" "$data/pixied/bin/pixi" "$pixi_home/bin/direnv")" "$output"
+
+        if [ "$mode" = nfs ]; then
+            printf 'eval "$(bash "%s" hook bash)"\n' "$cli" >"$home/.bashrc"
+            cat >"$home/.profile" <<'PROFILE'
+. "$HOME/.bashrc"
+if [ -z "${PIXIED_RUNTIME_HOOK_ACTIVE:-}" ] && [ -d "$HOME/.local/bin" ]; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+PROFILE
+            run env -i PATH="$inherited" HOME="$home" XDG_DATA_HOME="$data" \
+                XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_MACHINE_ID="path-$mode" \
+                bash --noprofile --norc -c '. "$HOME/.profile"; printf "home=%s\npath=%s\n" "$HOME" "$PATH"'
+            assert_success
+            assert_equal "$(printf 'home=%s\npath=%s' "$local_home" "$expected")" "$output"
+        fi
+    done
+}
+
+@test "profile PATH guard preserves active runtime and retains inactive behavior" {
+    local home="$PIXIED_TEST_ROOT/profile-guard-home"
+    local data="$PIXIED_TEST_ROOT/profile-guard-data"
+    local config="$PIXIED_TEST_ROOT/profile-guard-config"
+    local state="$PIXIED_TEST_ROOT/profile-guard-state"
+    mkdir -p "$home/.local/bin"
+    run env -i PATH="/usr/bin:/bin" HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=profile-guard \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" \
+        bash "$PIXIED_REPO_ROOT/install-local.sh" --yes --home-mode local
+    assert_success
+
+    printf 'eval "$(bash "%s" hook bash)"\n' "$data/pixied/bin/pixied" >"$home/.bashrc"
+    cat >"$home/.profile" <<'PROFILE'
+. "$HOME/.bashrc"
+if [ -z "${PIXIED_RUNTIME_HOOK_ACTIVE:-}" ] && [ -d "$HOME/.local/bin" ]; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+PROFILE
+    run env -i PATH="/usr/bin:/bin" HOME="$home" XDG_DATA_HOME="$data" \
+        XDG_CONFIG_HOME="$config" XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=profile-guard \
+        bash --noprofile --norc -c '. "$HOME/.profile"; printf "%s\n" "$PATH"'
+    assert_success
+    assert_equal "$data/pixied/bin:$data/pixied/pixi/bin:$home/.local/bin:/usr/bin:/bin" "$output"
+
+    printf ':\n' >"$home/.bashrc"
+    run env -i PATH="/usr/bin:/bin" HOME="$home" \
+        bash --noprofile --norc -c '. "$HOME/.profile"; printf "%s\n" "$PATH"'
+    assert_success
+    assert_equal "$home/.local/bin:/usr/bin:/bin" "$output"
 }
 
 # US-102-1
@@ -2589,7 +2694,7 @@ CURL
     assert_output --partial "pixi=$data/pixied/pixi"
     assert_output --partial "cache=$data/pixied/pixi/cache"
     assert_output --partial 'active=1'
-    assert_output --partial "pixied=$home/.local/bin/pixied"
+    assert_output --partial "pixied=$data/pixied/bin/pixied"
     [ "$HOME" != "$home" ] || pixied_test_fail "test shell HOME was changed"
     [ ! -e "$home/.cache" ] || pixied_test_fail "runtime hook created a host cache"
 
@@ -2699,7 +2804,7 @@ CURL
     assert_success
     assert_output --partial "child_home=$home"
     assert_output --partial "child_pixi=$data/pixied/pixi"
-    assert_output --partial "child_pixied=$home/.local/bin/pixied"
+    assert_output --partial "child_pixied=$data/pixied/bin/pixied"
 
     run env -u PIXI_HOME HOME="$home" XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$config" \
         XDG_STATE_HOME="$state" PIXIED_MACHINE_ID=phase3-command \
@@ -5050,6 +5155,15 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" bash -c \
+        'eval "$(bash "$1" hook bash)"; pixied version' bash "$data_b/bin/pixied"
+    assert_success
+    assert_output --partial "shared release: $current_version"
+    assert_output --partial 'local payload: 0.6.2'
+    assert_output --partial 'status: mismatch; run `pixied install`'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
         PIXIED_MACHINE_ID="$machine_b" bash "$launcher" run bash -c \
         'printf old-payload >"$HOME/nfs-version-marker"'
     assert_success
@@ -5065,6 +5179,22 @@ EOF
     assert_output --partial 'runtime-hook.bash'
     [[ "$output" != *'run `pixied install`'* ]] ||
         pixied_test_fail 'hook stdout included a runtime warning'
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" bash -c \
+        'eval "$(bash "$1" hook bash)"; pixied install --yes' bash "$data_b/bin/pixied"
+    assert_success
+    assert_equal "$current_version" "$(pixied_version_from_source "$data_b/bin/pixied")"
+
+    run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
+        PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home_b" \
+        PIXIED_MACHINE_ID="$machine_b" \
+        PIXIED_PIXI_BINARY_SOURCE="$PIXIED_REPO_ROOT/tests/fakes/pixi" bash -c \
+        'eval "$(bash "$1" hook bash)"; printf "\n# damaged\n" >>"$PIXIED_CONFIG_DIR/runtime-hook.bash"; pixied install --yes' \
+        bash "$data_b/bin/pixied"
+    assert_success
 }
 
 @test "NFS uninstall preserves shared distribution until the last machine" {
@@ -5334,7 +5464,8 @@ EOF
 
     run env -i PATH="$PATH" HOME="$account_home" XDG_STATE_HOME="$state" \
         PIXIED_HOME_MODE=nfs PIXIED_LOCAL_HOME="$local_home" \
-        PIXIED_MACHINE_ID="$machine_id" bash "$data/bin/pixied" uninstall --yes
+        PIXIED_MACHINE_ID="$machine_id" bash -c \
+        'eval "$(bash "$1" hook bash)"; pixied uninstall --yes' bash "$data/bin/pixied"
     assert_success
     [ ! -e "$data" ] || pixied_test_fail 'legacy uninstall left local payload'
     [ ! -e "$state/pixied/machines/$machine_id/state" ] ||

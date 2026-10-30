@@ -139,17 +139,18 @@ RUNTIME_BODY
     # This PATH logic is intentionally duplicated from pixied_path_prepend_unique:
     # the generated hook must remain self-contained after it is deployed.
     _pixied_path_is_present() {
-        local candidate existing
+        local candidate existing remaining
         candidate=$1
-        while IFS= read -r existing; do
+        remaining="$path_result:"
+        while [ -n "$remaining" ]; do
+            existing=${remaining%%:*}
+            remaining=${remaining#*:}
             [ "$existing" = "$candidate" ] && return 0
-        done <<PATH_RESULT
-$path_result
-PATH_RESULT
+        done
         return 1
     }
     path_result=""
-    for path_entry in "$command_bin" "$local_home/.local/bin" "$data_dir/bin" "$pixi_home/bin"; do
+    for path_entry in "$data_dir/bin" "$pixi_home/bin" "$command_bin" "$local_home/.local/bin"; do
         [ -n "$path_entry" ] || continue
         if ! _pixied_path_is_present "$path_entry"; then
             [ -z "$path_result" ] || path_result="${path_result}:"

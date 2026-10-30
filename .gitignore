@@ -1,7 +1,5 @@
 # output artifacts
 /dist/
 
-# temporary files for AI
-/_plan.md
-/_tasks.md
-/_review.md
+# temporary files
+/tmp/

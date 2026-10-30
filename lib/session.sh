@@ -264,7 +264,7 @@ pixied_path_prepend_unique() {
 # @set PIXI_NO_PATH_UPDATE integer Disables Pixi PATH mutation.
 # @set PATH string The deduplicated runtime PATH, including both the
 # account-side ~/.local/bin ($PIXIED_COMMAND_BIN) and the local-side
-# ~/.local/bin ($PIXIED_LOCAL_HOME/.local/bin).
+# ~/.local/bin ($PIXIED_LOCAL_HOME/.local/bin), after the managed bin directories.
 # @exitcode 0 Always.
 pixied_runtime_export_environment() {
     export HOME=$PIXIED_LOCAL_HOME
@@ -274,8 +274,8 @@ pixied_runtime_export_environment() {
     export PIXIED_RUNTIME_STATE_FILE=$PIXIED_STATE_FILE
     export PIXIED_RUNTIME_HOOK_ACTIVE=1
     PATH=$(pixied_path_prepend_unique \
-        "$PIXIED_COMMAND_BIN" "$PIXIED_LOCAL_HOME/.local/bin" \
-        "$PIXIED_DATA_DIR/bin" "$PIXIED_PIXI_HOME/bin")
+        "$PIXIED_DATA_DIR/bin" "$PIXIED_PIXI_HOME/bin" \
+        "$PIXIED_COMMAND_BIN" "$PIXIED_LOCAL_HOME/.local/bin")
     export PATH
 }
 
